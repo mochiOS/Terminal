@@ -62,27 +62,40 @@ impl TerminalBuffer {
     pub(crate) fn visible_text(&self, columns: usize, rows: usize) -> String {
         let columns = columns.max(1);
         let rows = rows.max(1);
-        let mut wrapped = Vec::new();
         let last_index = self.lines.len().saturating_sub(1);
+        let mut skipped = 0usize;
+        let mut visible = Vec::with_capacity(rows);
 
-        for (index, line) in self.lines.iter().enumerate() {
+        for (index, line) in self.lines.iter().enumerate().rev() {
             let mut characters: Vec<char> = line.chars().collect();
             if index == last_index && self.scroll_rows == 0 {
                 let cursor = self.cursor.min(characters.len());
                 characters.insert(cursor, '\u{258c}');
             }
             if characters.is_empty() {
-                wrapped.push(String::new());
-                continue;
+                if skipped < self.scroll_rows {
+                    skipped += 1;
+                } else {
+                    visible.push(String::new());
+                }
+            } else {
+                for chunk in characters.chunks(columns).rev() {
+                    if skipped < self.scroll_rows {
+                        skipped += 1;
+                    } else {
+                        visible.push(chunk.iter().collect::<String>());
+                        if visible.len() == rows {
+                            break;
+                        }
+                    }
+                }
             }
-            for chunk in characters.chunks(columns) {
-                wrapped.push(chunk.iter().collect::<String>());
+            if visible.len() == rows {
+                break;
             }
         }
-
-        let end = wrapped.len().saturating_sub(self.scroll_rows).max(1);
-        let start = end.saturating_sub(rows);
-        wrapped[start..end].join("\n")
+        visible.reverse();
+        visible.join("\n")
     }
 
     fn decode_pending_utf8(&mut self) {
@@ -223,5 +236,15 @@ mod tests {
         assert_eq!(buffer.visible_text(4, 3), "nd\nthir\nd\u{258c}");
         assert!(buffer.scroll(2));
         assert_eq!(buffer.visible_text(4, 3), "efgh\nseco\nnd");
+    }
+
+    #[test]
+    fn visible_text_only_returns_requested_tail_rows() {
+        let mut buffer = TerminalBuffer::default();
+        for index in 0..2_100 {
+            buffer.push_bytes(format!("line-{index}\n").as_bytes());
+        }
+
+        assert_eq!(buffer.visible_text(80, 2), "line-2099\n\u{258c}");
     }
 }

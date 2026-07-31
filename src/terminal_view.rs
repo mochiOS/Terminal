@@ -10,7 +10,7 @@ use viewkit::platform::CursorIcon;
 use viewkit::theme::Color;
 use viewkit::view::{Constraints, MeasureContext, PaintContext, View};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const POLL_INTERVAL: Duration = Duration::from_millis(16);
 const CONTENT_PADDING: f32 = 14.0;
 const FONT_SIZE: f32 = 14.0;
 const LINE_HEIGHT: f32 = 20.0;
@@ -20,11 +20,24 @@ const FOREGROUND: Color = Color::from_rgb_hex(0xe8eaed);
 
 pub(crate) struct TerminalView {
     session: Rc<RefCell<TerminalSession>>,
+    paint_state: RefCell<TerminalPaintState>,
+}
+
+#[derive(Default)]
+struct TerminalPaintState {
+    text: String,
+    columns: usize,
+    rows: usize,
+    initialized: bool,
+    render_pending: bool,
 }
 
 impl TerminalView {
     pub(crate) fn new(session: Rc<RefCell<TerminalSession>>) -> Self {
-        Self { session }
+        Self {
+            session,
+            paint_state: RefCell::new(TerminalPaintState::default()),
+        }
     }
 
     fn content_bounds(bounds: Rect) -> Rect {
@@ -52,25 +65,46 @@ impl View for TerminalView {
             .floor()
             .max(1.0) as usize;
         let rows = (content.size.height / LINE_HEIGHT).floor().max(1.0) as usize;
-        let text = {
+        let output_changed = {
             let mut session = self.session.borrow_mut();
-            let _ = session.poll();
-            session.visible_text(columns, rows)
+            session.poll()
         };
 
-        context
-            .display_list
-            .push(viewkit::draw_command::DrawCommand::PushClip { rect: content });
-        Text::new(text)
-            .monospaced()
-            .font_size(FONT_SIZE)
-            .line_height(LINE_HEIGHT)
-            .color(FOREGROUND)
-            .paint(content, context);
-        context
-            .display_list
-            .push(viewkit::draw_command::DrawCommand::PopClip);
-        context.request_redraw_in_at(bounds, Instant::now() + POLL_INTERVAL);
+        let mut paint_state = self.paint_state.borrow_mut();
+        let dimensions_changed = paint_state.columns != columns || paint_state.rows != rows;
+        let draw_text =
+            !paint_state.initialized || dimensions_changed || paint_state.render_pending;
+        if output_changed || draw_text {
+            paint_state.text = self.session.borrow().visible_text(columns, rows);
+            paint_state.columns = columns;
+            paint_state.rows = rows;
+            paint_state.initialized = true;
+        }
+
+        if output_changed && !draw_text {
+            paint_state.render_pending = true;
+            context.request_redraw_in_at(bounds, Instant::now());
+        }
+
+        if draw_text {
+            context
+                .display_list
+                .push(viewkit::draw_command::DrawCommand::PushClip { rect: content });
+            Text::new(paint_state.text.clone())
+                .monospaced()
+                .cache_layout(false)
+                .font_size(FONT_SIZE)
+                .line_height(LINE_HEIGHT)
+                .color(FOREGROUND)
+                .paint(content, context);
+            context
+                .display_list
+                .push(viewkit::draw_command::DrawCommand::PopClip);
+            paint_state.render_pending = false;
+        }
+
+        let poll_region = Rect::new(bounds.origin.x, bounds.origin.y, 1.0, 1.0);
+        context.request_redraw_in_at(poll_region, Instant::now() + POLL_INTERVAL);
     }
 
     fn handle_event(
@@ -81,20 +115,15 @@ impl View for TerminalView {
     ) -> EventResult {
         match event {
             ViewEvent::TextInput { text } => {
-                if self.session.borrow_mut().send_text(text) {
-                    context.request_redraw_in(bounds);
-                }
+                let _ = self.session.borrow_mut().send_text(text);
                 EventResult::Consumed
             }
             ViewEvent::Backspace => {
-                if self.session.borrow_mut().send_backspace() {
-                    context.request_redraw_in(bounds);
-                }
+                let _ = self.session.borrow_mut().send_backspace();
                 EventResult::Consumed
             }
             ViewEvent::KeyPressed { key, modifiers } => {
                 if self.session.borrow_mut().send_key(*key, *modifiers) {
-                    context.request_redraw_in(bounds);
                     EventResult::Consumed
                 } else {
                     EventResult::Ignored
@@ -105,6 +134,7 @@ impl View for TerminalView {
             } if bounds.contains(*position) => {
                 let rows = if *delta_y > 0.0 { 3 } else { -3 };
                 if self.session.borrow_mut().scroll(rows) {
+                    self.paint_state.borrow_mut().render_pending = true;
                     context.request_redraw_in(bounds);
                 }
                 EventResult::Consumed
