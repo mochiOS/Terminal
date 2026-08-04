@@ -301,7 +301,6 @@ fn spawn_msh() -> std::io::Result<(libc::pid_t, std::fs::File, std::fs::File, st
         mode.as_ptr().cast_mut(),
         core::ptr::null_mut(),
     ];
-    let envp: [*mut libc::c_char; 1] = [core::ptr::null_mut()];
     let mut pid = 0;
     let spawn_status = unsafe {
         libc::posix_spawn(
@@ -310,7 +309,7 @@ fn spawn_msh() -> std::io::Result<(libc::pid_t, std::fs::File, std::fs::File, st
             &actions,
             core::ptr::null(),
             argv.as_ptr(),
-            envp.as_ptr(),
+            core::ptr::null(),
         )
     };
     unsafe {
