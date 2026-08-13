@@ -29,7 +29,6 @@ struct TerminalPaintState {
     columns: usize,
     rows: usize,
     initialized: bool,
-    render_pending: bool,
 }
 
 impl TerminalView {
@@ -72,36 +71,25 @@ impl View for TerminalView {
 
         let mut paint_state = self.paint_state.borrow_mut();
         let dimensions_changed = paint_state.columns != columns || paint_state.rows != rows;
-        let draw_text =
-            !paint_state.initialized || dimensions_changed || paint_state.render_pending;
-        if output_changed || draw_text {
+        if output_changed || !paint_state.initialized || dimensions_changed {
             paint_state.text = self.session.borrow().visible_text(columns, rows);
             paint_state.columns = columns;
             paint_state.rows = rows;
             paint_state.initialized = true;
         }
 
-        if output_changed && !draw_text {
-            paint_state.render_pending = true;
-            context.request_redraw_in_at(bounds, Instant::now());
-        }
-
-        if draw_text {
-            context
-                .display_list
-                .push(viewkit::draw_command::DrawCommand::PushClip { rect: content });
-            Text::new(paint_state.text.clone())
-                .monospaced()
-                .cache_layout(false)
-                .font_size(FONT_SIZE)
-                .line_height(LINE_HEIGHT)
-                .color(FOREGROUND)
-                .paint(content, context);
-            context
-                .display_list
-                .push(viewkit::draw_command::DrawCommand::PopClip);
-            paint_state.render_pending = false;
-        }
+        context
+            .display_list
+            .push(viewkit::draw_command::DrawCommand::PushClip { rect: content });
+        Text::new(paint_state.text.clone())
+            .monospaced()
+            .font_size(FONT_SIZE)
+            .line_height(LINE_HEIGHT)
+            .color(FOREGROUND)
+            .paint(content, context);
+        context
+            .display_list
+            .push(viewkit::draw_command::DrawCommand::PopClip);
 
         let poll_region = Rect::new(bounds.origin.x, bounds.origin.y, 1.0, 1.0);
         context.request_redraw_in_at(poll_region, Instant::now() + POLL_INTERVAL);
@@ -134,7 +122,6 @@ impl View for TerminalView {
             } if bounds.contains(*position) => {
                 let rows = if *delta_y > 0.0 { 3 } else { -3 };
                 if self.session.borrow_mut().scroll(rows) {
-                    self.paint_state.borrow_mut().render_pending = true;
                     context.request_redraw_in(bounds);
                 }
                 EventResult::Consumed
