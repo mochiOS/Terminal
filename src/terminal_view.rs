@@ -91,6 +91,9 @@ impl View for TerminalView {
             .display_list
             .push(viewkit::draw_command::DrawCommand::PopClip);
 
+        if output_changed {
+            context.request_redraw_in_at(bounds, Instant::now());
+        }
         let poll_region = Rect::new(bounds.origin.x, bounds.origin.y, 1.0, 1.0);
         context.request_redraw_in_at(poll_region, Instant::now() + POLL_INTERVAL);
     }
