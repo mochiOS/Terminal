@@ -2348,3 +2348,35 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
+
+[[patch.unused]]
+name = "mnu-abi"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "viewkit"
+version = "1.0.1"
+
+[[patch.unused]]
+name = "libc"
+version = "0.2.185"
+
+[[patch.unused]]
+name = "rustc-std-workspace-alloc"
+version = "1.99.0"
+
+[[patch.unused]]
+name = "rustc-std-workspace-core"
+version = "1.99.0"
+
+[[patch.unused]]
+name = "rustc-std-workspace-std"
+version = "1.99.0"
+
+[[patch.unused]]
+name = "viewkit"
+version = "1.0.1"
+
+[[patch.unused]]
+name = "mboot-protocol"
+version = "0.1.0"
