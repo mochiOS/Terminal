@@ -114,6 +114,11 @@ impl TerminalSession {
     }
 
     pub(crate) fn send_key(&mut self, key: Key, modifiers: KeyModifiers) -> bool {
+        if let Key::Character(character) = key
+            && modifiers.control()
+        {
+            return self.send_packet(KeyPacket::new(0, character as u32, modifiers));
+        }
         let keycode = match key {
             Key::Escape => KEY_ESCAPE,
             Key::Delete => KEY_DELETE,
@@ -437,5 +442,14 @@ mod tests {
             &(INPUT_MOD_SHIFT | INPUT_MOD_CONTROL | INPUT_MOD_ALT).to_le_bytes()
         );
         assert_eq!(&encoded[28..32], &[0; 4]);
+    }
+
+    #[test]
+    fn control_character_keeps_its_codepoint_and_modifier() {
+        let modifiers = KeyModifiers::from_bits(KeyModifiers::CONTROL);
+        let encoded = KeyPacket::new(0, 'c' as u32, modifiers).encode();
+
+        assert_eq!(&encoded[8..12], &('c' as u32).to_le_bytes());
+        assert_eq!(&encoded[24..28], &INPUT_MOD_CONTROL.to_le_bytes());
     }
 }
