@@ -896,7 +896,6 @@ version = "0.1.0"
 [[package]]
 name = "mochi-user-syscall"
 version = "0.1.0"
-source = "git+https://github.com/mochiOS/syscalls#2daf400a0a90517c01dcf9ee55cac9d4e6813a1c"
 dependencies = [
  "mnu-abi",
 ]
@@ -2938,12 +2937,44 @@ name = "mboot-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
+name = "mochios-mdriver-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
 name = "rustc-std-workspace-alloc"
 version = "1.99.0"
 
 [[patch.unused]]
 name = "rustc-std-workspace-std"
 version = "1.99.0"
+
+[[patch.unused]]
+name = "mochi-user-platform"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-linux-gui-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-linux-portal-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-signature-protocol"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-tls-client"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-user-database"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "mochios-user-protocol"
+version = "0.1.0"
 
 [[patch.unused]]
 name = "mochios-virtio-gpu-protocol"

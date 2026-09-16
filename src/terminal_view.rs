@@ -7,16 +7,11 @@ use viewkit::components::{Rectangle, RectangleColor, Text};
 use viewkit::event::{EventContext, EventResult, ViewEvent};
 use viewkit::geometry::{Rect, Size};
 use viewkit::platform::CursorIcon;
-use viewkit::theme::Color;
+use viewkit::typography::TextRole;
 use viewkit::view::{Constraints, MeasureContext, PaintContext, View};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
-const CONTENT_PADDING: f32 = 14.0;
-const FONT_SIZE: f32 = 14.0;
-const LINE_HEIGHT: f32 = 20.0;
-const APPROXIMATE_GLYPH_WIDTH: f32 = 8.4;
-const BACKGROUND: Color = Color::from_rgb_hex(0x17181a);
-const FOREGROUND: Color = Color::from_rgb_hex(0xe8eaed);
+const APPROXIMATE_GLYPH_WIDTH_FACTOR: f32 = 0.6;
 
 pub(crate) struct TerminalView {
     session: Rc<RefCell<TerminalSession>>,
@@ -39,12 +34,12 @@ impl TerminalView {
         }
     }
 
-    fn content_bounds(bounds: Rect) -> Rect {
+    fn content_bounds(bounds: Rect, padding: f32) -> Rect {
         Rect::new(
-            bounds.origin.x + CONTENT_PADDING,
-            bounds.origin.y + CONTENT_PADDING,
-            (bounds.size.width - CONTENT_PADDING * 2.0).max(0.0),
-            (bounds.size.height - CONTENT_PADDING * 2.0).max(0.0),
+            bounds.origin.x + padding,
+            bounds.origin.y + padding,
+            (bounds.size.width - padding * 2.0).max(0.0),
+            (bounds.size.height - padding * 2.0).max(0.0),
         )
     }
 }
@@ -56,14 +51,19 @@ impl View for TerminalView {
 
     fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
         Rectangle::new()
-            .color(RectangleColor::Custom(BACKGROUND))
+            .color(RectangleColor::Custom(context.theme.colors.background))
             .paint(bounds, context);
 
-        let content = Self::content_bounds(bounds);
-        let columns = (content.size.width / APPROXIMATE_GLYPH_WIDTH)
+        let content = Self::content_bounds(bounds, context.theme.spacing.medium);
+        let code_style = context.typography.style(TextRole::Code);
+        let font_scale = context.text_measurer.font_scale();
+        let font_size = code_style.size * font_scale;
+        let line_height = code_style.line_height * font_scale;
+        let approximate_glyph_width = font_size * APPROXIMATE_GLYPH_WIDTH_FACTOR;
+        let columns = (content.size.width / approximate_glyph_width)
             .floor()
             .max(1.0) as usize;
-        let rows = (content.size.height / LINE_HEIGHT).floor().max(1.0) as usize;
+        let rows = (content.size.height / line_height).floor().max(1.0) as usize;
         let output_changed = {
             let mut session = self.session.borrow_mut();
             session.poll()
@@ -81,11 +81,8 @@ impl View for TerminalView {
         context
             .display_list
             .push(viewkit::draw_command::DrawCommand::PushClip { rect: content });
-        Text::new(paint_state.text.clone())
-            .monospaced()
-            .font_size(FONT_SIZE)
-            .line_height(LINE_HEIGHT)
-            .color(FOREGROUND)
+        Text::styled(paint_state.text.clone(), TextRole::Code)
+            .color(context.theme.colors.text_primary)
             .paint(content, context);
         context
             .display_list
