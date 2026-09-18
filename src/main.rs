@@ -24,7 +24,7 @@ impl App for TerminalApp {
 
     fn window(&self) -> WindowOptions {
         WindowOptions::new("Terminal")
-            .size(840.0, 540.0)
+            .compact()
             .resizable(true)
     }
 
