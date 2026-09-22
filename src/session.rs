@@ -349,16 +349,27 @@ fn configure_spawn_file_actions(
         unsafe { libc::posix_spawn_file_actions_adddup2(actions, stdin_pipe.0, 0) },
         unsafe { libc::posix_spawn_file_actions_adddup2(actions, stdout_pipe.1, 1) },
         unsafe { libc::posix_spawn_file_actions_adddup2(actions, stderr_pipe.1, 2) },
-        unsafe { libc::posix_spawn_file_actions_addclose(actions, stdin_pipe.0) },
-        unsafe { libc::posix_spawn_file_actions_addclose(actions, stdin_pipe.1) },
-        unsafe { libc::posix_spawn_file_actions_addclose(actions, stdout_pipe.0) },
-        unsafe { libc::posix_spawn_file_actions_addclose(actions, stdout_pipe.1) },
-        unsafe { libc::posix_spawn_file_actions_addclose(actions, stderr_pipe.0) },
-        unsafe { libc::posix_spawn_file_actions_addclose(actions, stderr_pipe.1) },
     ];
     for status in operations {
         if status != 0 {
             return Err(std::io::Error::from_raw_os_error(status));
+        }
+    }
+    // The parent may have closed stdio, causing pipe() to reuse descriptors
+    // 0, 1, or 2. Closing those after dup2 would close msh's new stdio too.
+    for fd in [
+        stdin_pipe.0,
+        stdin_pipe.1,
+        stdout_pipe.0,
+        stdout_pipe.1,
+        stderr_pipe.0,
+        stderr_pipe.1,
+    ] {
+        if fd > 2 {
+            let status = unsafe { libc::posix_spawn_file_actions_addclose(actions, fd) };
+            if status != 0 {
+                return Err(std::io::Error::from_raw_os_error(status));
+            }
         }
     }
     Ok(())
