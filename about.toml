@@ -4,8 +4,8 @@ version = "0.1.0"
 developer = "mochiOS"
 entry = "entry.elf"
 description = "Command-line terminal for mochiOS"
-icon = "appicon.svg"
+icon = "appicon.png"
 
 resources = [
-    "appicon.svg",
+    "appicon.png",
 ]
