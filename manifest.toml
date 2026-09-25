@@ -16,6 +16,8 @@ path = "/applications/Terminal.app/entry.elf"
 kind = "application"
 requires = [
     "fs.read.all",
+    "fs.write.tmp",
+    "fs.write.user",
     "ipc.client",
     "ipc.server",
     "process.spawn",
