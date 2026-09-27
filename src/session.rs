@@ -130,7 +130,8 @@ impl TerminalSession {
             Key::End => KEY_END,
             Key::PageUp => KEY_PAGE_UP,
             Key::PageDown => KEY_PAGE_DOWN,
-            Key::CapsLock
+            Key::Alt
+            | Key::CapsLock
             | Key::Backspace
             | Key::Tab
             | Key::Enter
