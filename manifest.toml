@@ -15,6 +15,7 @@ abi = "mochios-1"
 path = "/applications/Terminal.app/entry.elf"
 kind = "application"
 requires = [
+    "clipboard.read",
     "fs.read.all",
     "fs.write.tmp",
     "fs.write.user",

@@ -6,7 +6,7 @@ use crate::session::TerminalSession;
 use viewkit::components::{Rectangle, RectangleColor, Text};
 use viewkit::event::{EventContext, EventResult, ViewEvent};
 use viewkit::geometry::{Rect, Size};
-use viewkit::platform::CursorIcon;
+use viewkit::platform::{CursorIcon, Key};
 use viewkit::typography::TextRole;
 use viewkit::view::{Constraints, MeasureContext, PaintContext, View};
 
@@ -42,6 +42,18 @@ impl TerminalView {
             (bounds.size.height - padding * 2.0).max(0.0),
         )
     }
+}
+
+#[cfg(target_os = "mochios")]
+fn clipboard_text() -> Option<String> {
+    mochi_user_platform::workspace::clipboard_text()
+        .ok()
+        .flatten()
+}
+
+#[cfg(not(target_os = "mochios"))]
+fn clipboard_text() -> Option<String> {
+    None
 }
 
 impl View for TerminalView {
@@ -108,6 +120,18 @@ impl View for TerminalView {
             }
             ViewEvent::Backspace => {
                 let _ = self.session.borrow_mut().send_backspace();
+                EventResult::Consumed
+            }
+            ViewEvent::KeyPressed {
+                key: Key::Character(character),
+                modifiers,
+            } if modifiers.shortcut()
+                && modifiers.shift()
+                && (*character == 'v' || *character == 'V') =>
+            {
+                if let Some(text) = clipboard_text() {
+                    let _ = self.session.borrow_mut().send_text(&text);
+                }
                 EventResult::Consumed
             }
             ViewEvent::KeyPressed { key, modifiers } => {
