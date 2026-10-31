@@ -17,6 +17,14 @@ impl Drop for Reference {
 struct Exported(ExportedFdHandle);
 impl Exported {
     fn new(fd: libc::c_int, direction: u64) -> io::Result<Self> {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // A PTY slave is normally O_RDWR on all three slots. Its input FD
+        // must remain writable when login_tty duplicates it onto stdout.
+        // mochi_fd_export still enforces the source Handle's rights ceiling.
+        let direction = crate::stdio_access::data_rights(flags, direction)?;
         let rights = direction
             | p::handle::HANDLE_RIGHT_WAIT
             | p::handle::HANDLE_RIGHT_CONTROL

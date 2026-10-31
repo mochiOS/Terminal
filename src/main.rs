@@ -3,6 +3,11 @@ mod session;
 mod terminal_view;
 #[cfg(target_os = "mochios")]
 mod native_launch;
+#[cfg(target_os = "mochios")]
+mod stdio_access;
+#[cfg(mochios_pty_launch_probe_310)]
+#[path = "../../../services/posix/tests/support/pty_launch_terminal_310.rs"]
+mod pty_launch_probe;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -36,5 +41,7 @@ impl App for TerminalApp {
 }
 
 fn main() -> Result<(), ViewKitError> {
+    #[cfg(mochios_pty_launch_probe_310)]
+    pty_launch_probe::run();
     run::<TerminalApp>()
 }
