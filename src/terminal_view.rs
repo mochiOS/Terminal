@@ -78,6 +78,7 @@ impl View for TerminalView {
         let rows = (content.size.height / line_height).floor().max(1.0) as usize;
         let output_changed = {
             let mut session = self.session.borrow_mut();
+            session.resize(columns, rows);
             session.poll()
         };
 

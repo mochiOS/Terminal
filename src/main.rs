@@ -1,10 +1,15 @@
 mod model;
+mod input;
 mod session;
 mod terminal_view;
 #[cfg(target_os = "mochios")]
 mod native_launch;
 #[cfg(target_os = "mochios")]
 mod stdio_access;
+#[cfg(target_os = "mochios")]
+mod pending_input;
+#[cfg(target_os = "mochios")]
+mod transport;
 #[cfg(mochios_pty_launch_probe_310)]
 #[path = "../../../services/posix/tests/support/pty_launch_terminal_310.rs"]
 mod pty_launch_probe;

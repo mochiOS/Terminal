@@ -91,7 +91,7 @@ pub(crate) fn spawn(
         .ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "capability.service is unavailable")
         })?;
-    let environment: Vec<String> = [
+    let mut environment: Vec<String> = [
         "HOME",
         "USER",
         "LOGNAME",
@@ -106,6 +106,8 @@ pub(crate) fn spawn(
             .map(|value| format!("{key}={value}"))
     })
     .collect();
+    // The current renderer is a scrollback console, not a full VT emulator.
+    environment.push(String::from("TERM=dumb"));
     let environment: Vec<&str> = environment.iter().map(String::as_str).collect();
     let process = p::application::spawn_with_stdio(
         destination,
