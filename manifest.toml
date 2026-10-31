@@ -28,6 +28,5 @@ requires = [
     "ipc.client",
     "ipc.server",
     "process.spawn",
-    "system.random.read",
     "window.create",
 ]

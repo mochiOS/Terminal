@@ -263,7 +263,6 @@ impl Drop for MochiOsTransport {
 
 #[cfg(target_os = "mochios")]
 fn spawn_msh() -> std::io::Result<(libc::pid_t, std::fs::File, std::fs::File, std::fs::File)> {
-    use std::ffi::CString;
     use std::os::fd::FromRawFd;
 
     let stdin_pipe = create_pipe()?;
@@ -282,56 +281,19 @@ fn spawn_msh() -> std::io::Result<(libc::pid_t, std::fs::File, std::fs::File, st
             return Err(error);
         }
     };
-    let path = CString::new("/system/bin/msh")
-        .map_err(|_| std::io::Error::other("invalid msh executable path"))?;
-    let mode = CString::new("--stdio-input")
-        .map_err(|_| std::io::Error::other("invalid msh input mode"))?;
-
-    let mut actions: libc::posix_spawn_file_actions_t = core::ptr::null_mut();
-    let init_status = unsafe { libc::posix_spawn_file_actions_init(&mut actions) };
-    if init_status != 0 {
-        close_pipe(stdin_pipe);
-        close_pipe(stdout_pipe);
-        close_pipe(stderr_pipe);
-        return Err(std::io::Error::from_raw_os_error(init_status));
-    }
-    let actions_status =
-        configure_spawn_file_actions(&mut actions, stdin_pipe, stdout_pipe, stderr_pipe);
-    if let Err(error) = actions_status {
-        unsafe {
-            libc::posix_spawn_file_actions_destroy(&mut actions);
+    let pid = match crate::native_launch::spawn(
+        "/system/bin/msh",
+        &["/system/bin/msh", "--stdio-input"],
+        [stdin_pipe.0, stdout_pipe.1, stderr_pipe.1],
+    ) {
+        Ok(pid) => pid,
+        Err(error) => {
+            close_pipe(stdin_pipe);
+            close_pipe(stdout_pipe);
+            close_pipe(stderr_pipe);
+            return Err(error);
         }
-        close_pipe(stdin_pipe);
-        close_pipe(stdout_pipe);
-        close_pipe(stderr_pipe);
-        return Err(error);
-    }
-
-    let argv = [
-        path.as_ptr().cast_mut(),
-        mode.as_ptr().cast_mut(),
-        core::ptr::null_mut(),
-    ];
-    let mut pid = 0;
-    let spawn_status = unsafe {
-        libc::posix_spawn(
-            &mut pid,
-            path.as_ptr(),
-            &actions,
-            core::ptr::null(),
-            argv.as_ptr(),
-            core::ptr::null(),
-        )
     };
-    unsafe {
-        libc::posix_spawn_file_actions_destroy(&mut actions);
-    }
-    if spawn_status != 0 {
-        close_pipe(stdin_pipe);
-        close_pipe(stdout_pipe);
-        close_pipe(stderr_pipe);
-        return Err(std::io::Error::from_raw_os_error(spawn_status));
-    }
 
     unsafe {
         libc::close(stdin_pipe.0);
@@ -342,43 +304,6 @@ fn spawn_msh() -> std::io::Result<(libc::pid_t, std::fs::File, std::fs::File, st
     let stdout = unsafe { std::fs::File::from_raw_fd(stdout_pipe.0) };
     let stderr = unsafe { std::fs::File::from_raw_fd(stderr_pipe.0) };
     Ok((pid, stdin, stdout, stderr))
-}
-
-#[cfg(target_os = "mochios")]
-fn configure_spawn_file_actions(
-    actions: &mut libc::posix_spawn_file_actions_t,
-    stdin_pipe: (libc::c_int, libc::c_int),
-    stdout_pipe: (libc::c_int, libc::c_int),
-    stderr_pipe: (libc::c_int, libc::c_int),
-) -> std::io::Result<()> {
-    let operations = [
-        unsafe { libc::posix_spawn_file_actions_adddup2(actions, stdin_pipe.0, 0) },
-        unsafe { libc::posix_spawn_file_actions_adddup2(actions, stdout_pipe.1, 1) },
-        unsafe { libc::posix_spawn_file_actions_adddup2(actions, stderr_pipe.1, 2) },
-    ];
-    for status in operations {
-        if status != 0 {
-            return Err(std::io::Error::from_raw_os_error(status));
-        }
-    }
-    // The parent may have closed stdio, causing pipe() to reuse descriptors
-    // 0, 1, or 2. Closing those after dup2 would close msh's new stdio too.
-    for fd in [
-        stdin_pipe.0,
-        stdin_pipe.1,
-        stdout_pipe.0,
-        stdout_pipe.1,
-        stderr_pipe.0,
-        stderr_pipe.1,
-    ] {
-        if fd > 2 {
-            let status = unsafe { libc::posix_spawn_file_actions_addclose(actions, fd) };
-            if status != 0 {
-                return Err(std::io::Error::from_raw_os_error(status));
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(target_os = "mochios")]

@@ -12,6 +12,8 @@ viewkit = "2.0.0"
 [target.'cfg(target_os = "mochios")'.dependencies]
 libc = { git = "https://github.com/mochiOS/libc", package = "libc" }
 mochi-user-platform = { git = "https://github.com/mochiOS/syscalls", package = "mochi-user-platform", default-features = false, features = ["std"] }
+mochios-posix-client = { git = "https://github.com/mochiOS/syscalls", package = "mochios-posix-client", default-features = false, features = ["syscall-endpoint"] }
+mochios-posix-protocol = { git = "https://github.com/mochiOS/syscalls", package = "mochios-posix-protocol" }
 
 [[bin]]
 name = "terminal"

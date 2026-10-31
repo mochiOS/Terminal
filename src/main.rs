@@ -1,6 +1,8 @@
 mod model;
 mod session;
 mod terminal_view;
+#[cfg(target_os = "mochios")]
+mod native_launch;
 
 use std::cell::RefCell;
 use std::rc::Rc;

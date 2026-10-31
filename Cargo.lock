@@ -1049,12 +1049,43 @@ name = "mochios-capability-protocol"
 version = "0.1.0"
 
 [[package]]
+name = "mochios-filesystem-protocol"
+version = "0.1.0"
+
+[[package]]
 name = "mochios-fonts"
 version = "0.1.0"
 dependencies = [
  "sha2",
  "ttf-parser",
 ]
+
+[[package]]
+name = "mochios-net-device-protocol"
+version = "0.1.0"
+
+[[package]]
+name = "mochios-posix-client"
+version = "0.1.0"
+dependencies = [
+ "mnu-abi",
+ "mochi-user-syscall",
+ "mochios-filesystem-protocol",
+ "mochios-net-device-protocol",
+ "mochios-posix-protocol",
+]
+
+[[package]]
+name = "mochios-posix-protocol"
+version = "0.1.0"
+dependencies = [
+ "mnu-abi",
+ "mochios-user-protocol",
+]
+
+[[package]]
+name = "mochios-user-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "mochios-viewkit-gpu-protocol"
@@ -2180,6 +2211,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "mochi-user-platform",
+ "mochios-posix-client",
+ "mochios-posix-protocol",
  "viewkit",
 ]
 
@@ -3203,27 +3236,11 @@ name = "mochi-user-runtime"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "mochios-filesystem-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
 name = "mochios-linux-gui-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
 name = "mochios-linux-portal-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-net-device-protocol"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-posix-client"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-posix-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
@@ -3236,10 +3253,6 @@ version = "0.1.0"
 
 [[patch.unused]]
 name = "mochios-user-database"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-user-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
