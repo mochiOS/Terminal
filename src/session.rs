@@ -282,7 +282,7 @@ fn spawn_msh() -> std::io::Result<(libc::pid_t, std::fs::File, std::fs::File, st
             return Err(error);
         }
     };
-    let path = CString::new("/bin/msh")
+    let path = CString::new("/system/bin/msh")
         .map_err(|_| std::io::Error::other("invalid msh executable path"))?;
     let mode = CString::new("--stdio-input")
         .map_err(|_| std::io::Error::other("invalid msh input mode"))?;
