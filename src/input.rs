@@ -61,3 +61,58 @@ pub(crate) fn special(key: Special, shift: bool, alt: bool, control: bool) -> Ve
 pub(crate) fn text(text: &str) -> Vec<u8> {
     text.replace("\r\n", "\n").replace('\r', "\n").into_bytes()
 }
+
+pub(crate) fn function(n: u8, shift: bool, alt: bool, control: bool) -> Option<Vec<u8>> {
+    let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(control);
+    if (1..=4).contains(&n) {
+        let suffix = char::from(b'P' + n - 1);
+        Some(
+            if modifier == 1 {
+                format!("\x1bO{suffix}")
+            } else {
+                format!("\x1b[1;{modifier}{suffix}")
+            }
+            .into_bytes(),
+        )
+    } else {
+        let number = match n {
+            5 => 15,
+            6 => 17,
+            7 => 18,
+            8 => 19,
+            9 => 20,
+            10 => 21,
+            11 => 23,
+            12 => 24,
+            _ => return None,
+        };
+        Some(
+            if modifier == 1 {
+                format!("\x1b[{number}~")
+            } else {
+                format!("\x1b[{number};{modifier}~")
+            }
+            .into_bytes(),
+        )
+    }
+}
+pub(crate) fn insert(shift: bool, alt: bool, control: bool) -> Vec<u8> {
+    let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(control);
+    if modifier == 1 {
+        b"\x1b[2~".to_vec()
+    } else {
+        format!("\x1b[2;{modifier}~").into_bytes()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn shell_control_and_function_keys_are_not_ui_commands() {
+        assert_eq!(character('c', true, false).unwrap(), [3]);
+        assert_eq!(function(1, false, false, false).unwrap(), b"\x1bOP");
+        assert_eq!(function(12, true, false, true).unwrap(), b"\x1b[24;6~");
+        assert_eq!(special(Special::Up, false, true, true), b"\x1b[1;7A");
+        assert!(function(13, false, false, false).is_none());
+    }
+}

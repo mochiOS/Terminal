@@ -1,94 +1,163 @@
 use crate::{
     input::{self, Special},
     model::TerminalBuffer,
+    settings::Profile,
 };
 use viewkit::platform::{Key, KeyModifiers};
-
 pub(crate) struct TerminalSession {
-    buffer: TerminalBuffer,
+    pub buffer: TerminalBuffer,
     dimensions: (usize, usize),
     dirty: bool,
-    #[cfg(target_os = "mochios")]
     transport: Option<crate::transport::Transport>,
-    #[cfg(target_os = "mochios")]
-    launch_attempted: bool,
+    attempted: bool,
+    pub profile: Profile,
+    pub failed: bool,
 }
 impl TerminalSession {
-    pub(crate) fn start() -> Self {
-        let mut session = Self {
-            buffer: TerminalBuffer::default(),
-            dimensions: (80, 24),
-            dirty: false,
-            #[cfg(target_os = "mochios")]
-            transport: None,
-            #[cfg(target_os = "mochios")]
-            launch_attempted: false,
-        };
-        #[cfg(not(target_os = "mochios"))]
-        session
-            .buffer
-            .push_message("Terminal session is available on mochiOS.");
-        session
+    #[cfg(mochios_pty_launch_probe_310)]
+    pub fn start() -> Self {
+        Self::with_profile(Profile::default(), 2000)
     }
-    pub(crate) fn resize(&mut self, columns: usize, rows: usize) {
-        let size = (columns.max(1), rows.max(1));
-        if self.dimensions == size {
+    pub fn with_profile(profile: Profile, scrollback: usize) -> Self {
+        Self {
+            buffer: TerminalBuffer::new(scrollback),
+            dimensions: (80, 24),
+            dirty: true,
+            transport: None,
+            attempted: false,
+            profile,
+            failed: false,
+        }
+    }
+    pub fn running(&self) -> bool {
+        !self.failed
+            && self
+                .transport
+                .as_ref()
+                .is_none_or(|transport| !transport.exited)
+    }
+    pub fn needs_poll(&self) -> bool {
+        !self.failed
+            && self
+                .transport
+                .as_ref()
+                .is_none_or(|t| !t.exited || !t.output_closed)
+    }
+    #[cfg(test)]
+    pub fn suppress_launch(&mut self) {
+        self.attempted = true;
+    }
+    pub fn title(&self) -> String {
+        if self.buffer.title().is_empty() {
+            self.profile.name.clone()
+        } else {
+            self.buffer.title().to_owned()
+        }
+    }
+    pub fn resize(&mut self, columns: usize, rows: usize) {
+        let size = (columns.clamp(1, 512), rows.clamp(1, 256));
+        if size == self.dimensions {
             return;
         }
         self.dimensions = size;
-        #[cfg(target_os = "mochios")]
-        if let Some(transport) = self.transport.as_ref()
-            && let Err(error) = transport.resize(size.0, size.1)
-        {
-            self.buffer
-                .push_message(&format!("terminal: resize failed: {error}"));
-            self.dirty = true;
+        self.buffer.resize(size.0, size.1);
+        self.dirty = true;
+        if let Some(transport) = &self.transport {
+            if let Err(error) = transport.resize(size.0, size.1) {
+                self.buffer
+                    .push_message(&format!("terminal: resize failed: {error}"));
+            }
         }
     }
-    pub(crate) fn poll(&mut self) -> bool {
+    pub fn poll(&mut self) -> bool {
         let mut changed = std::mem::take(&mut self.dirty);
-        #[cfg(target_os = "mochios")]
-        {
-            if self.transport.is_none() && !self.launch_attempted {
-                self.launch_attempted = true;
-                match crate::transport::Transport::start(self.dimensions.0, self.dimensions.1) {
-                    Ok(transport) => self.transport = Some(transport),
-                    Err(error) => {
-                        self.buffer
-                            .push_message(&format!("terminal: failed to start msh: {error}"));
-                        return true;
-                    }
+        if !self.attempted {
+            self.attempted = true;
+            match crate::transport::Transport::start(
+                self.dimensions.0,
+                self.dimensions.1,
+                &self.profile,
+            ) {
+                Ok(transport) => self.transport = Some(transport),
+                Err(error) => {
+                    self.failed = true;
+                    self.buffer
+                        .push_message(&format!("Unable to start {}: {error}", self.profile.name));
+                    return true;
                 }
             }
-            if let Some(transport) = self.transport.as_mut() {
-                changed |= transport.poll(&mut self.buffer);
-                if transport.exited && !transport.exit_reported {
-                    self.buffer.push_message("[Process completed]");
-                    transport.exit_reported = true;
-                    changed = true;
-                }
+        }
+        if let Some(transport) = self.transport.as_mut() {
+            changed |= transport.poll(&mut self.buffer);
+            let replies = self.buffer.replies();
+            if !replies.is_empty() {
+                let _ = transport.send(&replies);
+            }
+            if transport.exited && transport.output_closed && !transport.exit_reported {
+                let status = transport
+                    .exit_status
+                    .map(|s| {
+                        if s & 0x7f == 0 {
+                            format!("exit code {}", (s >> 8) & 255)
+                        } else {
+                            format!("signal {}", s & 0x7f)
+                        }
+                    })
+                    .unwrap_or_else(|| "status unavailable".into());
+                self.buffer.push_message(&format!(
+                    "\r\n[Process completed: {status} — close this pane or start a new session]"
+                ));
+                transport.exit_reported = true;
+                changed = true;
             }
         }
         changed
     }
-    pub(crate) fn visible_text(&self, columns: usize, rows: usize) -> String {
+    #[cfg(mochios_pty_launch_probe_310)]
+    pub fn visible_text(&self, columns: usize, rows: usize) -> String {
         self.buffer.visible_text(columns, rows)
     }
-    pub(crate) fn scroll(&mut self, rows: i32) -> bool {
+    pub fn scroll(&mut self, rows: i32) -> bool {
         self.buffer.scroll(rows)
     }
-    pub(crate) fn send_text(&mut self, text: &str) -> bool {
+    pub fn send_text(&mut self, text: &str) -> bool {
         self.send(&input::text(text))
     }
-    pub(crate) fn send_backspace(&mut self) -> bool {
+    pub fn paste(&mut self, text: &str) -> bool {
+        if text.len() > 60_000 {
+            return false;
+        }
+        let Some(bytes) = paste_bytes(text, self.buffer.screen().bracketed_paste()) else {
+            return false;
+        };
+        self.send(&bytes)
+    }
+    pub fn send_backspace(&mut self) -> bool {
         self.send(&[127])
     }
-    pub(crate) fn send_key(&mut self, key: Key, modifiers: KeyModifiers) -> bool {
-        if let Key::Character(value) = key
-            && (modifiers.control() || modifiers.alt())
-        {
-            return input::character(value, modifiers.control(), modifiers.alt())
-                .is_some_and(|bytes| self.send(&bytes));
+    pub fn send_key(&mut self, key: Key, modifiers: KeyModifiers) -> bool {
+        if let Key::Character(c) = key {
+            if modifiers.control() || modifiers.alt() {
+                return input::character(c, modifiers.control(), modifiers.alt())
+                    .is_some_and(|bytes| self.send(&bytes));
+            }
+        }
+        if let Key::Function(n) = key {
+            return input::function(n, modifiers.shift(), modifiers.alt(), modifiers.control())
+                .is_some_and(|b| self.send(&b));
+        }
+        if key == Key::Insert {
+            return self.send(&input::insert(
+                modifiers.shift(),
+                modifiers.alt(),
+                modifiers.control(),
+            ));
+        }
+        if key == Key::Enter {
+            return self.send(if modifiers.alt() { b"\x1b\r" } else { b"\r" });
+        }
+        if key == Key::Tab && !modifiers.shift() {
+            return self.send(b"\t");
         }
         if key == Key::Space && modifiers.control() {
             return self.send(&[0]);
@@ -107,6 +176,24 @@ impl TerminalSession {
             Key::Tab if modifiers.shift() => Special::BackTab,
             _ => return false,
         };
+        if self.buffer.screen().application_cursor()
+            && !modifiers.shift()
+            && !modifiers.alt()
+            && !modifiers.control()
+        {
+            let suffix = match key {
+                Key::ArrowUp => Some(b'A'),
+                Key::ArrowDown => Some(b'B'),
+                Key::ArrowRight => Some(b'C'),
+                Key::ArrowLeft => Some(b'D'),
+                Key::Home => Some(b'H'),
+                Key::End => Some(b'F'),
+                _ => None,
+            };
+            if let Some(suffix) = suffix {
+                return self.send(&[27, b'O', suffix]);
+            }
+        }
         self.send(&input::special(
             special,
             modifiers.shift(),
@@ -114,19 +201,50 @@ impl TerminalSession {
             modifiers.control(),
         ))
     }
-    fn send(&mut self, bytes: &[u8]) -> bool {
-        #[cfg(target_os = "mochios")]
+    pub fn send(&mut self, bytes: &[u8]) -> bool {
+        self.buffer.live();
+        self.dirty = true;
         if let Some(transport) = self.transport.as_mut() {
             match transport.send(bytes) {
                 Ok(()) => return true,
-                Err(error) => {
-                    self.buffer.push_message(&format!("terminal: {error}"));
-                    self.dirty = true;
-                }
+                Err(error) => self
+                    .buffer
+                    .push_message(&format!("Input was not accepted: {error}")),
             }
         }
-        #[cfg(not(target_os = "mochios"))]
-        let _ = bytes;
         false
+    }
+}
+
+fn paste_bytes(text: &str, bracketed: bool) -> Option<Vec<u8>> {
+    if text.len() > 60_000 {
+        return None;
+    }
+    // Do not allow a paste to inject a bracketed-paste terminator or arbitrary ESC controls.
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let safe: String = normalized
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+        .collect();
+    let bytes = if bracketed {
+        format!("\x1b[200~{safe}\x1b[201~").into_bytes()
+    } else {
+        safe.replace('\n', "\r").into_bytes()
+    };
+
+    Some(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn paste_normalizes_lines_strips_escape_injection_and_never_truncates() {
+        assert_eq!(paste_bytes("a\r\nb\rc", false).unwrap(), b"a\rb\rc");
+        assert_eq!(
+            paste_bytes("x\x1b[201~y", true).unwrap(),
+            b"\x1b[200~x[201~y\x1b[201~"
+        );
+        assert!(paste_bytes(&"界".repeat(20001), true).is_none());
     }
 }

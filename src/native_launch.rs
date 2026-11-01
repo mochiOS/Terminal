@@ -106,8 +106,9 @@ pub(crate) fn spawn(
             .map(|value| format!("{key}={value}"))
     })
     .collect();
-    // The current renderer is a scrollback console, not a full VT emulator.
-    environment.push(String::from("TERM=dumb"));
+    // The shared VT screen handles ANSI colors, cursor addressing and alternate screens.
+    environment.push(String::from("TERM=xterm-256color"));
+    environment.push(String::from("COLORTERM=truecolor"));
     let environment: Vec<&str> = environment.iter().map(String::as_str).collect();
     let process = p::application::spawn_with_stdio(
         destination,

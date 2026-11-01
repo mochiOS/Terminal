@@ -37,3 +37,43 @@ impl PendingInput {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn partial_and_blocked_writes_preserve_order_and_reject_overflow_atomically() {
+        struct Writer {
+            out: Vec<u8>,
+            blocked: bool,
+        }
+        impl Write for Writer {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                if self.blocked {
+                    return Err(io::ErrorKind::WouldBlock.into());
+                }
+                let n = b.len().min(3);
+                self.out.extend_from_slice(&b[..n]);
+                Ok(n)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut pending = PendingInput::default();
+        let bytes: Vec<u8> = (0..100).collect();
+        pending.enqueue(&bytes).unwrap();
+        assert!(pending.enqueue(&vec![0; CAPACITY]).is_err());
+        let mut writer = Writer {
+            out: vec![],
+            blocked: true,
+        };
+        pending.flush(&mut writer).unwrap();
+        assert!(writer.out.is_empty());
+        writer.blocked = false;
+        for _ in 0..20 {
+            pending.flush(&mut writer).unwrap();
+        }
+        assert_eq!(writer.out, bytes);
+    }
+}

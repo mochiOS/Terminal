@@ -8,6 +8,13 @@ publish = false
 
 [dependencies]
 viewkit = "2.0.0"
+appcore = { package = "mochios-appcore", path = "../../tools/devkit/crates/appcore" }
+vt100 = "=0.18.1"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { git = "https://github.com/mochiOS/libc", package = "libc" }
 
 [target.'cfg(target_os = "mochios")'.dependencies]
 libc = { git = "https://github.com/mochiOS/libc", package = "libc" }
@@ -24,3 +31,6 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("mochios"))', 'cfg(mochios_pty_launch_probe_310)'] }

@@ -22,6 +22,7 @@ path = "/system/applications/Terminal.app/entry.elf"
 kind = "application"
 requires = [
     "clipboard.read",
+    "clipboard.write",
     "fs.read.all",
     "fs.write.tmp",
     "fs.write.user",
