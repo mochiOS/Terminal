@@ -18,15 +18,11 @@ use viewkit::{
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Action {
     New(usize),
-    Split(bool),
-    ClosePane,
     CloseTab,
     CloseTabId(u64),
     Dropdown,
     NextTab(i8),
     MoveTab(i8),
-    FocusNext,
-    ZoomPane,
     Find,
     Search(bool),
     Copy,
@@ -51,7 +47,6 @@ enum Panel {
     None,
     Commands,
     Settings,
-    ClosePane,
     CloseTab,
     CloseWindow,
     Paste,
@@ -319,53 +314,33 @@ impl Core {
                     self.workspace.borrow_mut().new_tab(index)?;
                     self.panel.set(Panel::None);
                 }
-                Action::Split(horizontal) => {
-                    self.workspace.borrow_mut().split(horizontal)?;
-                    self.panel.set(Panel::None);
-                }
                 Action::Dropdown => {
                     self.open_menu.set(true);
                 }
-                Action::ClosePane | Action::CloseTab | Action::CloseTabId(_) => {
+                Action::CloseTab | Action::CloseTabId(_) => {
+                    let w = self.workspace.borrow();
                     let target = match action {
                         Action::CloseTabId(id) => Some(id),
-                        _ => self
-                            .workspace
-                            .borrow()
-                            .tabs
-                            .get(self.workspace.borrow().active)
-                            .map(|t| t.id),
+                        _ => w.tabs.get(w.active).map(|t| t.id),
                     };
-                    let confirm = self.workspace.borrow().settings.borrow().confirm_close;
-                    let running = if action == Action::ClosePane {
-                        self.selected()
-                            .is_some_and(|p| p.session.borrow().running())
-                    } else {
-                        let w = self.workspace.borrow();
-                        w.tabs
-                            .iter()
-                            .find(|t| Some(t.id) == target)
-                            .and_then(|t| t.root.as_ref())
-                            .is_some_and(|root| {
-                                let mut panes = vec![];
-                                root.leaves(&mut panes);
-                                panes.iter().any(|p| p.session.borrow().running())
-                            })
-                    };
+                    let running = w
+                        .tabs
+                        .iter()
+                        .find(|t| Some(t.id) == target)
+                        .and_then(|t| t.root.as_ref())
+                        .is_some_and(|root| {
+                            let mut sessions = vec![];
+                            root.leaves(&mut sessions);
+                            sessions.iter().any(|p| p.session.borrow().running())
+                        });
+                    let confirm = w.settings.borrow().confirm_close;
+                    drop(w);
                     self.close_target.set(target);
                     if confirm && running {
-                        self.panel.set(if action == Action::ClosePane {
-                            Panel::ClosePane
-                        } else {
-                            Panel::CloseTab
-                        });
+                        self.panel.set(Panel::CloseTab);
                     } else {
-                        if action == Action::ClosePane {
-                            self.workspace.borrow_mut().close_pane();
-                        } else {
-                            if let Some(id) = target {
-                                self.workspace.borrow_mut().close_tab_id(id);
-                            }
+                        if let Some(id) = target {
+                            self.workspace.borrow_mut().close_tab_id(id);
                         }
                         self.panel.set(Panel::None);
                     }
@@ -386,7 +361,6 @@ impl Core {
                                 }
                             }
                         }
-                        Panel::ClosePane => self.workspace.borrow_mut().close_pane(),
                         Panel::CloseTab => {
                             if let Some(id) = self.close_target.take() {
                                 self.workspace.borrow_mut().close_tab_id(id);
@@ -424,11 +398,6 @@ impl Core {
                         w.tabs.swap(active, other as usize);
                         w.active = other as usize;
                     }
-                }
-                Action::FocusNext => self.workspace.borrow_mut().focus_next(),
-                Action::ZoomPane => {
-                    let mut w = self.workspace.borrow_mut();
-                    w.zoomed = !w.zoomed;
                 }
                 Action::Find => {
                     self.find_visible.set(!self.find_visible.get());
@@ -636,37 +605,12 @@ impl Core {
                 "New tab".into(),
                 "Ctrl+Shift+T".into(),
             ),
-            (
-                Action::Split(true),
-                "Split right".into(),
-                "Ctrl+Shift+D".into(),
-            ),
-            (
-                Action::Split(false),
-                "Split down".into(),
-                "Ctrl+Alt+D".into(),
-            ),
-            (
-                Action::ClosePane,
-                "Close active pane".into(),
-                "Ctrl+Shift+W".into(),
-            ),
-            (Action::CloseTab, "Close tab".into(), "Ctrl+Alt+W".into()),
+            (Action::CloseTab, "Close tab".into(), "Ctrl+Shift+W".into()),
             (Action::NextTab(1), "Next tab".into(), "Ctrl+Tab".into()),
             (
                 Action::NextTab(-1),
                 "Previous tab".into(),
                 "Ctrl+Shift+Tab".into(),
-            ),
-            (
-                Action::FocusNext,
-                "Focus next pane".into(),
-                "Alt+Arrow".into(),
-            ),
-            (
-                Action::ZoomPane,
-                "Zoom active pane".into(),
-                "Ctrl+Shift+Z".into(),
             ),
             (
                 Action::Find,
@@ -725,6 +669,7 @@ impl Core {
         let width = Theme::current().layout.navigation_sidebar_width;
         let mut tabs = Tabs::with_interaction(self.tab_selected.binding(), self.tabs.clone())
             .item_width(width)
+            .document_style()
             .accessibility_label("Terminal tabs");
         for tab in &w.tabs {
             let title = tab.name.clone().unwrap_or_else(|| {
@@ -740,11 +685,9 @@ impl Core {
             });
             let pending = self.pending.clone();
             let id = tab.id;
-            tabs = tabs.closable_item(
-                tab.id as usize,
-                title.chars().take(30).collect::<String>(),
-                move || pending.set(Some(Action::CloseTabId(id))),
-            );
+            tabs = tabs.closable_item(tab.id as usize, title, move || {
+                pending.set(Some(Action::CloseTabId(id)))
+            });
         }
         let default = w.settings.borrow().default_profile;
         HStack::new()
@@ -802,17 +745,14 @@ impl Core {
             separator: true,
         });
         for (action, label) in [
-            (Action::Split(true), "Split right"),
-            (Action::Split(false), "Split down"),
             (Action::Find, "Find…"),
             (Action::Commands, "Command palette…"),
             (Action::Settings, "Settings…"),
-            (Action::ClosePane, "Close pane"),
             (Action::CloseTab, "Close tab"),
         ] {
             let enabled =
                 !w.tabs.is_empty() || matches!(action, Action::Commands | Action::Settings);
-            let destructive = matches!(action, Action::ClosePane | Action::CloseTab);
+            let destructive = matches!(action, Action::CloseTab);
             actions.push(action);
             items.push(ContextMenuItem {
                 command_id: actions.len() as u32,
@@ -1018,7 +958,7 @@ impl Core {
                         .child(self.button("Rename", Action::RenameApply)),
                 );
         } else {
-            content=content.child(Text::styled("Close running sessions?",TextRole::TitleSmall)).child(Text::body("Processes in the selected pane or tab will be terminated. Terminal output is not restored after closing."))
+            content=content.child(Text::styled(if panel==Panel::CloseWindow {"Close Terminal?"} else {"Close this tab?"},TextRole::TitleSmall)).child(Text::body(if panel==Panel::CloseWindow {"All running sessions will be terminated. Terminal output is not restored after closing."} else {"The process running in this tab will be terminated. Terminal output is not restored after closing."}))
             .child(HStack::new().gap(StackGap::Small).child(self.button("Cancel",Action::Cancel)).child(self.button("Close",Action::Confirm).style(ButtonStyle::Danger)));
         }
         Dialog::new()
@@ -1132,9 +1072,7 @@ impl TerminalUi {
                                 .borrow()
                                 .default_profile,
                         )),
-                        ('d', true, _) => Some(Action::Split(true)),
-                        ('d', _, true) => Some(Action::Split(false)),
-                        ('w', true, _) => Some(Action::ClosePane),
+                        ('w', true, _) => Some(Action::CloseTab),
                         ('w', _, true) => Some(Action::CloseTab),
                         ('p', true, _) => Some(Action::Commands),
                         ('f', true, _) => Some(Action::Find),
@@ -1142,7 +1080,6 @@ impl TerminalUi {
                         ('v', true, _) => Some(Action::Paste),
                         ('a', true, _) => Some(Action::SelectAll),
                         ('k', true, _) => Some(Action::Clear),
-                        ('z', true, _) => Some(Action::ZoomPane),
                         (',', _, _) => Some(Action::Settings),
                         ('+' | '=', _, _) => Some(Action::Zoom(1)),
                         ('-', _, _) => Some(Action::Zoom(-1)),
@@ -1153,18 +1090,7 @@ impl TerminalUi {
                 _ => {}
             }
         }
-        if m.alt()
-            && !m.control()
-            && matches!(
-                key,
-                Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown
-            )
-            && self.core.workspace.borrow().all().len() > 1
-        {
-            Some(Action::FocusNext)
-        } else {
-            None
-        }
+        None
     }
 }
 impl View for TerminalUi {
@@ -1505,24 +1431,10 @@ impl View for TerminalUi {
                         Action::Copy,
                         Action::Paste,
                         Action::Find,
-                        Action::Split(true),
-                        Action::Split(false),
-                        Action::ZoomPane,
                         Action::Rename,
-                        Action::ClosePane,
                         Action::CloseTab,
                     ];
-                    let labels = [
-                        "Copy",
-                        "Paste",
-                        "Find…",
-                        "Split Right",
-                        "Split Down",
-                        "Zoom Pane",
-                        "Rename Tab…",
-                        "Close Pane",
-                        "Close Tab",
-                    ];
+                    let labels = ["Copy", "Paste", "Find…", "Rename Tab…", "Close Tab"];
                     let id = self.core.next_context.get() + 1;
                     self.core.next_context.set(id);
                     self.core
@@ -1539,7 +1451,7 @@ impl View for TerminalUi {
                                 label: (*label).into(),
                                 enabled: i != 0 || pane.view.selected_text().is_some(),
                                 checked: false,
-                                destructive: i >= 7,
+                                destructive: i >= 4,
                                 separator: false,
                             })
                             .collect(),
@@ -1641,19 +1553,19 @@ mod tests {
     fn workspace_commands_settings_cancel_and_close_confirmation_are_functional() {
         let v = fixture();
         let c = &v.core;
-        c.queue(Action::Split(true));
+        c.queue(Action::New(0));
         c.apply();
         assert_eq!(c.workspace.borrow().all().len(), 2);
         for p in c.workspace.borrow().all() {
             p.session.borrow_mut().suppress_launch();
         }
-        c.queue(Action::ClosePane);
+        c.queue(Action::CloseTab);
         c.apply();
-        assert!(c.panel.get() == Panel::ClosePane);
+        assert!(c.panel.get() == Panel::CloseTab);
         c.queue(Action::Cancel);
         c.apply();
         assert_eq!(c.workspace.borrow().all().len(), 2);
-        c.queue(Action::ClosePane);
+        c.queue(Action::CloseTab);
         c.apply();
         c.queue(Action::Confirm);
         c.apply();
@@ -1752,6 +1664,7 @@ mod tests {
         let mut cx = EventContext::new(&t, &t.typography, &mut text);
         v.core.queue(Action::Commands);
         v.core.apply();
+        v.core.palette_query.state.set_value("New tab");
         v.handle_event(
             b,
             &ViewEvent::KeyPressed {
@@ -1871,9 +1784,46 @@ mod tests {
         assert_eq!(v.core.workspace.borrow().tabs.len(), 1);
     }
     #[test]
-    fn native_views_paint_small_large_split_and_modal_without_borrow_panics() {
+    fn split_and_pane_commands_are_absent_from_the_public_ui() {
         let v = fixture();
-        v.core.queue(Action::Split(true));
+        assert!(
+            !v.core
+                .commands()
+                .iter()
+                .any(|(_, label, _)| label.to_lowercase().contains("split")
+                    || label.to_lowercase().contains("pane"))
+        );
+        assert!(
+            v.key(
+                Key::Character('d'),
+                KeyModifiers::from_bits(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+            )
+            .is_none()
+        );
+        assert!(
+            v.key(
+                Key::Character('d'),
+                KeyModifiers::from_bits(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            )
+            .is_none()
+        );
+        let t = Theme::LIGHT;
+        let mut text = TextMeasurer::new();
+        let mut c = EventContext::new(&t, &t.typography, &mut text);
+        v.core.show_dropdown(Point::new(200., 40.), &mut c);
+        let menu = c.take_context_menu_request().unwrap();
+        assert!(
+            !menu
+                .items
+                .iter()
+                .any(|i| i.label.to_lowercase().contains("split")
+                    || i.label.to_lowercase().contains("pane"))
+        );
+    }
+    #[test]
+    fn native_views_paint_small_large_tabs_and_modal_without_borrow_panics() {
+        let v = fixture();
+        v.core.queue(Action::New(0));
         v.core.apply();
         for p in v.core.workspace.borrow().all() {
             let mut s = p.session.borrow_mut();
@@ -1886,7 +1836,7 @@ mod tests {
                 for panel in [
                     Panel::None,
                     Panel::Commands,
-                    Panel::ClosePane,
+                    Panel::CloseTab,
                     Panel::Paste,
                     Panel::Rename,
                     Panel::Settings,

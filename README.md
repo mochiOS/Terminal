@@ -1,6 +1,6 @@
 # Terminal
 
-A native AppCore/ViewKit terminal workspace for mochiOS. Tabs and split panes
+A native AppCore/ViewKit terminal workspace for mochiOS. Tabs
 own independent PTYs; shell output is interpreted by a bounded VT screen rather
 than stripped into a text log. The interface uses the system's existing omochi
 controls, symbols, typography and surfaces.
@@ -12,10 +12,9 @@ builds the native application.
 ## Everyday use
 
 - **+** beside the tabs starts the default profile. **▼** opens profiles and
-  terminal actions. Each tab has a **×** button that closes only that session group.
-  Closing an inactive tab preserves the active session.
-- **Split right / Split down** in the ▼ menu starts an independent session using the active
-  pane's profile. Click a pane to focus it and drag its divider to resize it.
+  terminal actions. Each tab has a **×** button that closes only that session.
+  Closing an inactive tab preserves the active session. Long titles use a measured
+  ellipsis and retain their full accessible name.
 - **Command palette** in the ▼ menu searches available actions and profiles. Use Up/Down to choose,
   Enter to run, and Escape to dismiss.
 - **Find** in the ▼ menu searches literal, case-sensitive text across the bounded scrollback.
@@ -35,14 +34,9 @@ builds the native application.
 | Shortcut | Action |
 | --- | --- |
 | Ctrl+Shift+T | New default-profile tab |
+| Ctrl+Shift+W | Close active tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Ctrl+Shift+PageUp / PageDown | Move tab left / right |
-| Ctrl+Shift+D | Split right |
-| Ctrl+Alt+D | Split down |
-| Alt+Arrow | Cycle panes |
-| Ctrl+Shift+Z | Zoom / restore active pane |
-| Ctrl+Shift+W | Close active pane |
-| Ctrl+Alt+W | Close tab |
 | Ctrl+Shift+P | Commands |
 | Ctrl+Shift+F | Find |
 | Ctrl+Shift+C / V | Copy / paste |
@@ -79,7 +73,7 @@ notice and defaults without overwriting the file. Paths:
 - Standalone Linux: `$XDG_CONFIG_HOME/mochios/terminal/settings.toml`, falling back
   to `$HOME/.config/mochios/terminal/settings.toml`
 
-Limits are 12 profiles, 12 tabs, 8 panes per tab and 16 sessions per workspace.
+Limits are 12 profiles, 12 tabs per workspace.
 
 ## Terminal and platform behavior
 
@@ -93,7 +87,7 @@ a bounded partial-write queue; output reads are bounded per poll.
 The mochiOS transport retains the authenticated POSIX launch scope and verified
 Capability broker path. Only the PTY slave descriptors are delegated to the child.
 The Linux transport uses a real controlling PTY, exact argv and a separate process
-session. Neither path fakes a shell. Closing a pane releases its PTY and reaps the
+session. Neither path fakes a shell. Closing a tab releases its PTY and reaps the
 child.
 
 Current boundaries compared with a full Windows Terminal implementation:
@@ -113,7 +107,7 @@ Current boundaries compared with a full Windows Terminal implementation:
 
 Tests cover VT operations, UTF-8/wide cells, alternate screens, search navigation,
 escape-sequence isolation, literal arguments, atomic settings writes, partial
-input writes, independent pane ownership, native UI keyboard/modal behavior,
+input writes, independent tab ownership, native UI keyboard/modal behavior,
 paste confirmation and rendering at small/large sizes in both appearances.
 Linux tests execute real PTY children to verify working directories, ANSI output,
 resize, Ctrl+C, complete output draining, exit status and child cleanup.
