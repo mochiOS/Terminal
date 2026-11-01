@@ -926,7 +926,10 @@ impl Core {
                 .child(self.palette_query.view.clone())
                 .child(
                     Scroll::new(self.palette_scroll.clone())
-                        .content(list)
+                        .content(
+                            Padding::only(0.0, Theme::current().spacing.medium, 0.0, 0.0)
+                                .content(list),
+                        )
                         .layout()
                         .flex_grow(1.0)
                         .flex_shrink(1.0),
