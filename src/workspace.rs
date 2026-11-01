@@ -314,6 +314,16 @@ impl Workspace {
         }
         self.zoomed = false;
     }
+    pub fn close_tab_id(&mut self, id: u64) {
+        let active = self.tabs.get(self.active).map(|t| t.id);
+        if let Some(index) = self.tabs.iter().position(|t| t.id == id) {
+            self.tabs.remove(index);
+            self.active = active
+                .and_then(|id| self.tabs.iter().position(|t| t.id == id))
+                .unwrap_or(index.min(self.tabs.len().saturating_sub(1)));
+            self.zoomed = false;
+        }
+    }
     pub fn focus_next(&mut self) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             let mut panes = vec![];

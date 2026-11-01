@@ -436,6 +436,8 @@ impl View for TerminalView {
             bounds,
         );
         node.label = Some(format!("Terminal: {}", session.title()));
+        node.focusable = true;
+        node.focused = self.focused.get();
         c.record_accessibility(node);
     }
     fn handle_event(

@@ -23,7 +23,7 @@ struct TerminalApp {
     core: Rc<ui::Core>,
 }
 impl App for TerminalApp {
-    type Body = ApplicationMenuBar<ui::TerminalUi>;
+    type Body = ui::TerminalUi;
     fn new() -> Self {
         Self {
             core: ui::Core::new(),
@@ -35,60 +35,9 @@ impl App for TerminalApp {
             .resizable(true)
     }
     fn body(&self, _: &ViewContext) -> Self::Body {
-        let new = self.core.clone();
-        let close = self.core.clone();
-        let commands = self.core.clone();
-        let settings = self.core.clone();
-        let copy = self.core.clone();
-        let paste = self.core.clone();
-        let find = self.core.clone();
-        ApplicationMenuBar::new(ui::TerminalUi {
+        ui::TerminalUi {
             core: self.core.clone(),
-        })
-        .menu(
-            ApplicationMenu::new("Terminal")
-                .item(
-                    ApplicationMenuItem::new("New Tab", move || {
-                        let index = new.workspace.borrow().settings.borrow().default_profile;
-                        new.queue(ui::Action::New(index));
-                    })
-                    .shortcut(MenuShortcut::command('t', "Ctrl+Shift+T").shift()),
-                )
-                .item(
-                    ApplicationMenuItem::new("Close Pane", move || {
-                        close.queue(ui::Action::ClosePane)
-                    })
-                    .shortcut(MenuShortcut::command('w', "Ctrl+Shift+W").shift()),
-                )
-                .separator()
-                .item(
-                    ApplicationMenuItem::new("Commands…", move || {
-                        commands.queue(ui::Action::Commands)
-                    })
-                    .shortcut(MenuShortcut::command('p', "Ctrl+Shift+P").shift()),
-                )
-                .item(
-                    ApplicationMenuItem::new("Settings…", move || {
-                        settings.queue(ui::Action::Settings)
-                    })
-                    .shortcut(MenuShortcut::command(',', "Ctrl+,")),
-                ),
-        )
-        .menu(
-            ApplicationMenu::new("Edit")
-                .item(
-                    ApplicationMenuItem::new("Copy", move || copy.queue(ui::Action::Copy))
-                        .shortcut(MenuShortcut::command('c', "Ctrl+Shift+C").shift()),
-                )
-                .item(
-                    ApplicationMenuItem::new("Paste", move || paste.queue(ui::Action::Paste))
-                        .shortcut(MenuShortcut::command('v', "Ctrl+Shift+V").shift()),
-                )
-                .item(
-                    ApplicationMenuItem::new("Find…", move || find.queue(ui::Action::Find))
-                        .shortcut(MenuShortcut::command('f', "Ctrl+Shift+F").shift()),
-                ),
-        )
+        }
     }
     fn close_requested(&mut self) -> bool {
         self.core.request_close()

@@ -11,13 +11,14 @@ builds the native application.
 
 ## Everyday use
 
-- **New Tab** starts the default profile. **Profiles** starts another configured
-  shell or executable in a new tab.
-- **Split Right / Split Down** starts an independent session using the active
+- **+** beside the tabs starts the default profile. **▼** opens profiles and
+  terminal actions. Each tab has a **×** button that closes only that session group.
+  Closing an inactive tab preserves the active session.
+- **Split right / Split down** in the ▼ menu starts an independent session using the active
   pane's profile. Click a pane to focus it and drag its divider to resize it.
-- **Commands** searches available actions and profiles. Use Up/Down to choose,
+- **Command palette** in the ▼ menu searches available actions and profiles. Use Up/Down to choose,
   Enter to run, and Escape to dismiss.
-- **Find** searches literal, case-sensitive text across the bounded scrollback.
+- **Find** in the ▼ menu searches literal, case-sensitive text across the bounded scrollback.
   Enter finds the next result; Shift+Enter finds the previous result, with wrapping.
 - Drag to select text. Copy preserves the selected text even when output changes.
   Hold Shift to select or scroll locally when a TUI has enabled mouse reporting.

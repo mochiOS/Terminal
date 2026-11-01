@@ -21,6 +21,8 @@ pub(crate) enum Action {
     Split(bool),
     ClosePane,
     CloseTab,
+    CloseTabId(u64),
+    Dropdown,
     NextTab(i8),
     MoveTab(i8),
     FocusNext,
@@ -204,10 +206,12 @@ pub(crate) struct Core {
     pending: Rc<Cell<Option<Action>>>,
     buttons: RefCell<BTreeMap<(Action, u8), ButtonInteractionState>>,
     toolbar: ActionToolbarState<Action>,
+    icons: RefCell<BTreeMap<Action, IconButtonInteractionState>>,
+    open_menu: Cell<bool>,
+    close_target: Cell<Option<u64>>,
     tabs: TabsInteractionState,
     tab_selected: State<usize>,
     tab_scroll: ScrollState,
-    profiles: RefCell<Option<(Vec<String>, Rc<Picker>)>>,
     panel: Cell<Panel>,
     find_visible: Cell<bool>,
     find: Field,
@@ -234,10 +238,12 @@ impl Core {
             pending: Rc::new(Cell::new(None)),
             buttons: RefCell::new(BTreeMap::new()),
             toolbar: ActionToolbarState::new(),
+            icons: RefCell::new(BTreeMap::new()),
+            open_menu: Cell::new(false),
+            close_target: Cell::new(None),
             tabs: TabsInteractionState::new(),
-            tab_selected: State::new(0),
+            tab_selected: State::new(1),
             tab_scroll: ScrollState::new(),
-            profiles: RefCell::new(None),
             panel: Cell::new(Panel::None),
             find_visible: Cell::new(false),
             find: Field::new("Find in scrollback"),
@@ -268,6 +274,18 @@ impl Core {
         let pending = self.pending.clone();
         Button::with_interaction_and_label(self.interaction(a.clone(), 0), label)
             .on_click(move || pending.set(Some(a.clone())))
+    }
+    fn icon(&self, symbol: SymbolName, label: &str, action: Action) -> IconButton {
+        let state = self
+            .icons
+            .borrow_mut()
+            .entry(action.clone())
+            .or_default()
+            .clone();
+        let pending = self.pending.clone();
+        IconButton::with_interaction(symbol, state)
+            .accessibility_label(label)
+            .on_click(move || pending.set(Some(action.clone())))
     }
     pub fn queue(&self, a: Action) {
         self.pending.set(Some(a));
@@ -305,7 +323,19 @@ impl Core {
                     self.workspace.borrow_mut().split(horizontal)?;
                     self.panel.set(Panel::None);
                 }
-                Action::ClosePane | Action::CloseTab => {
+                Action::Dropdown => {
+                    self.open_menu.set(true);
+                }
+                Action::ClosePane | Action::CloseTab | Action::CloseTabId(_) => {
+                    let target = match action {
+                        Action::CloseTabId(id) => Some(id),
+                        _ => self
+                            .workspace
+                            .borrow()
+                            .tabs
+                            .get(self.workspace.borrow().active)
+                            .map(|t| t.id),
+                    };
                     let confirm = self.workspace.borrow().settings.borrow().confirm_close;
                     let running = if action == Action::ClosePane {
                         self.selected()
@@ -313,7 +343,8 @@ impl Core {
                     } else {
                         let w = self.workspace.borrow();
                         w.tabs
-                            .get(w.active)
+                            .iter()
+                            .find(|t| Some(t.id) == target)
                             .and_then(|t| t.root.as_ref())
                             .is_some_and(|root| {
                                 let mut panes = vec![];
@@ -321,6 +352,7 @@ impl Core {
                                 panes.iter().any(|p| p.session.borrow().running())
                             })
                     };
+                    self.close_target.set(target);
                     if confirm && running {
                         self.panel.set(if action == Action::ClosePane {
                             Panel::ClosePane
@@ -331,7 +363,9 @@ impl Core {
                         if action == Action::ClosePane {
                             self.workspace.borrow_mut().close_pane();
                         } else {
-                            self.workspace.borrow_mut().close_tab();
+                            if let Some(id) = target {
+                                self.workspace.borrow_mut().close_tab_id(id);
+                            }
                         }
                         self.panel.set(Panel::None);
                     }
@@ -353,7 +387,11 @@ impl Core {
                             }
                         }
                         Panel::ClosePane => self.workspace.borrow_mut().close_pane(),
-                        Panel::CloseTab => self.workspace.borrow_mut().close_tab(),
+                        Panel::CloseTab => {
+                            if let Some(id) = self.close_target.take() {
+                                self.workspace.borrow_mut().close_tab_id(id);
+                            }
+                        }
                         Panel::CloseWindow => {
                             self.exit_confirmed.set(true);
                             request_quit();
@@ -363,6 +401,7 @@ impl Core {
                     self.panel.set(Panel::None);
                 }
                 Action::Cancel => {
+                    self.close_target.set(None);
                     self.pending_paste.borrow_mut().take();
                     self.panel.set(Panel::None);
                     self.editor.borrow_mut().take();
@@ -466,7 +505,6 @@ impl Core {
                         .settings()?;
                     settings.save_to(&Settings::path())?;
                     *self.workspace.borrow().settings.borrow_mut() = settings;
-                    self.profiles.borrow_mut().take();
                     self.editor.borrow_mut().take();
                     self.panel.set(Panel::None);
                     *self.notice.borrow_mut() =
@@ -558,7 +596,9 @@ impl Core {
         if let Err(error) = result {
             *self.notice.borrow_mut() = error;
         }
-        self.tab_selected.set(self.workspace.borrow().active);
+        let w = self.workspace.borrow();
+        self.tab_selected
+            .set(w.tabs.get(w.active).map(|t| t.id as usize).unwrap_or(0));
     }
     fn prepare_paste(&self, text: String) -> Result<(), String> {
         self.panel.set(Panel::None);
@@ -680,64 +720,13 @@ impl Core {
         }
         commands
     }
-    fn profile_picker(&self) -> Rc<Picker> {
-        let names: Vec<_> = self
-            .workspace
-            .borrow()
-            .settings
-            .borrow()
-            .profiles
-            .iter()
-            .map(|p| p.name.clone())
-            .collect();
-        if let Some((old, picker)) = self.profiles.borrow().as_ref() {
-            if *old == names {
-                return picker.clone();
-            }
-        }
-        let mut picker = Picker::new("Profiles");
-        for (index, name) in names.iter().enumerate() {
-            let pending = self.pending.clone();
-            picker = picker.option(name, move || pending.set(Some(Action::New(index))));
-        }
-        let picker = Rc::new(picker);
-        self.profiles.replace(Some((names, picker.clone())));
-        picker
-    }
-    fn toolbar(&self) -> ActionToolbar<Action> {
-        let default = self.workspace.borrow().settings.borrow().default_profile;
-        ActionToolbar::new(self.toolbar.clone())
-            .title("Terminal")
-            .leading(
-                Action::New(default),
-                self.button("New Tab", Action::New(default))
-                    .leading_symbol(SymbolName::Plus),
-            )
-            .trailing(
-                Action::Split(true),
-                self.button("Split Right", Action::Split(true)),
-            )
-            .trailing(
-                Action::Split(false),
-                self.button("Split Down", Action::Split(false)),
-            )
-            .trailing(
-                Action::ClosePane,
-                self.button("Close Pane", Action::ClosePane),
-            )
-            .trailing(
-                Action::Find,
-                self.button("Find", Action::Find)
-                    .leading_symbol(SymbolName::Search),
-            )
-            .trailing(Action::Commands, self.button("Commands", Action::Commands))
-            .trailing(Action::Settings, self.button("Settings", Action::Settings))
-    }
     fn tabstrip(&self) -> HStack {
         let w = self.workspace.borrow();
+        let width = Theme::current().layout.navigation_sidebar_width;
         let mut tabs = Tabs::with_interaction(self.tab_selected.binding(), self.tabs.clone())
+            .item_width(width)
             .accessibility_label("Terminal tabs");
-        for (index, tab) in w.tabs.iter().enumerate() {
+        for tab in &w.tabs {
             let title = tab.name.clone().unwrap_or_else(|| {
                 let mut leaves = vec![];
                 if let Some(root) = &tab.root {
@@ -749,25 +738,104 @@ impl Core {
                     .map(|p| p.session.borrow().title())
                     .unwrap_or_else(|| "Terminal".into())
             });
-            tabs = tabs.item(index, title.chars().take(24).collect::<String>());
+            let pending = self.pending.clone();
+            let id = tab.id;
+            tabs = tabs.closable_item(
+                tab.id as usize,
+                title.chars().take(30).collect::<String>(),
+                move || pending.set(Some(Action::CloseTabId(id))),
+            );
         }
+        let default = w.settings.borrow().default_profile;
         HStack::new()
             .alignment(StackAlignment::Center)
-            .gap(StackGap::Small)
+            .gap(StackGap::ExtraSmall)
             .child(
                 Scroll::new(self.tab_scroll.clone())
                     .axis(ScrollAxis::Horizontal)
                     .content(tabs)
                     .layout()
-                    .flex_grow(1.0)
+                    .width(width * w.tabs.len() as f32)
                     .flex_shrink(1.0),
             )
             .child(
-                self.profile_picker()
-                    .layout()
-                    .width(Theme::current().layout.toolbar_navigation_width)
-                    .flex_shrink(0.0),
+                self.icon(
+                    SymbolName::Plus,
+                    "New tab (Ctrl+Shift+T)",
+                    Action::New(default),
+                )
+                .layout()
+                .flex_shrink(0.0),
             )
+            .child(
+                self.icon(
+                    SymbolName::ChevronDown,
+                    "Profiles and terminal actions",
+                    Action::Dropdown,
+                )
+                .layout()
+                .flex_shrink(0.0),
+            )
+            .child(Spacer::new())
+    }
+    fn show_dropdown(&self, position: Point, c: &mut EventContext<'_>) {
+        let w = self.workspace.borrow();
+        let mut actions = vec![];
+        let mut items = vec![];
+        for (index, profile) in w.settings.borrow().profiles.iter().enumerate() {
+            actions.push(Action::New(index));
+            items.push(ContextMenuItem {
+                command_id: actions.len() as u32,
+                label: format!("New {} tab", profile.name),
+                enabled: true,
+                checked: false,
+                destructive: false,
+                separator: false,
+            });
+        }
+        items.push(ContextMenuItem {
+            command_id: 0,
+            label: String::new(),
+            enabled: false,
+            checked: false,
+            destructive: false,
+            separator: true,
+        });
+        for (action, label) in [
+            (Action::Split(true), "Split right"),
+            (Action::Split(false), "Split down"),
+            (Action::Find, "Find…"),
+            (Action::Commands, "Command palette…"),
+            (Action::Settings, "Settings…"),
+            (Action::ClosePane, "Close pane"),
+            (Action::CloseTab, "Close tab"),
+        ] {
+            let enabled =
+                !w.tabs.is_empty() || matches!(action, Action::Commands | Action::Settings);
+            let destructive = matches!(action, Action::ClosePane | Action::CloseTab);
+            actions.push(action);
+            items.push(ContextMenuItem {
+                command_id: actions.len() as u32,
+                label: label.into(),
+                enabled,
+                checked: false,
+                destructive,
+                separator: false,
+            });
+        }
+        let id = self.next_context.get() + 1;
+        self.next_context.set(id);
+        let (tab, pane) = w
+            .tabs
+            .get(w.active)
+            .map(|t| (t.id, t.active))
+            .unwrap_or((0, 0));
+        self.context.replace(Some((id, tab, pane, actions)));
+        c.show_context_menu(ContextMenuRequest {
+            request_id: id,
+            position,
+            items,
+        });
     }
     fn finder(&self) -> VStack {
         VStack::new()
@@ -968,7 +1036,6 @@ pub(crate) struct TerminalUi {
 }
 #[derive(Clone, Copy)]
 struct Frames {
-    toolbar: Rect,
     tabs: Rect,
     find: Option<Rect>,
     body: Rect,
@@ -976,13 +1043,16 @@ struct Frames {
 }
 impl TerminalUi {
     fn frames(&self, b: Rect, c: &mut MeasureContext<'_>) -> Frames {
-        let top = c.theme.layout.top_bar_height.min(b.size.height);
+        let top = 0.0;
         let tab = c.theme.tabs.height.min((b.size.height - top).max(0.0));
-        let status = c
-            .theme
-            .layout
-            .status_bar_height
-            .min((b.size.height - top - tab).max(0.0));
+        let status = if !self.core.notice.borrow().is_empty() || self.core.find_visible.get() {
+            c.theme
+                .layout
+                .status_bar_height
+                .min((b.size.height - top - tab).max(0.0))
+        } else {
+            0.0
+        };
         let find_height = if self.core.find_visible.get() {
             Toolbar::new(self.core.finder())
                 .measure(
@@ -995,7 +1065,6 @@ impl TerminalUi {
             0.0
         };
         Frames {
-            toolbar: Rect::new(b.origin.x, b.origin.y, b.size.width, top),
             tabs: Rect::new(b.origin.x, b.origin.y + top, b.size.width, tab),
             find: self.core.find_visible.get().then(|| {
                 Rect::new(
@@ -1144,7 +1213,6 @@ impl View for TerminalUi {
             },
         );
         Surface::app().paint(b, c);
-        Toolbar::new(self.core.toolbar()).paint(frames.toolbar, c);
         Surface::sidebar()
             .content(self.core.tabstrip())
             .paint(frames.tabs, c);
@@ -1352,9 +1420,10 @@ impl View for TerminalUi {
             if let Some((id, tab, pane, actions)) = self.core.context.borrow_mut().take() {
                 let w = self.core.workspace.borrow();
                 if id == *request_id
-                    && w.tabs
-                        .get(w.active)
-                        .is_some_and(|t| t.id == tab && t.active == pane)
+                    && ((tab == 0 && w.tabs.is_empty())
+                        || w.tabs
+                            .get(w.active)
+                            .is_some_and(|t| t.id == tab && t.active == pane))
                 {
                     if let Some(action) =
                         command_id.and_then(|id| actions.get(id.saturating_sub(1) as usize))
@@ -1486,11 +1555,7 @@ impl View for TerminalUi {
                 | ViewEvent::TextInput { .. }
                 | ViewEvent::Backspace
         );
-        let mut result = if keyboard {
-            EventResult::Ignored
-        } else {
-            Toolbar::new(self.core.toolbar()).handle_event(frames.toolbar, e, c)
-        };
+        let mut result = EventResult::Ignored;
         if !matches!(
             e,
             ViewEvent::KeyPressed { .. } | ViewEvent::TextInput { .. } | ViewEvent::Backspace
@@ -1498,9 +1563,11 @@ impl View for TerminalUi {
             result = result.merge(self.core.tabstrip().handle_event(frames.tabs, e, c));
             let selected = self.core.tab_selected.get();
             let mut w = self.core.workspace.borrow_mut();
-            if selected < w.tabs.len() && w.active != selected {
-                w.active = selected;
-                w.zoomed = false;
+            if let Some(index) = w.tabs.iter().position(|t| t.id as usize == selected) {
+                if w.active != index {
+                    w.active = index;
+                    w.zoomed = false;
+                }
             }
         }
         if let Some(find) = frames
@@ -1537,6 +1604,22 @@ impl View for TerminalUi {
             self.core.last_activity.set(Instant::now());
         }
         self.core.apply();
+        if self.core.open_menu.replace(false) {
+            let count = self.core.workspace.borrow().tabs.len();
+            let x = (frames.tabs.origin.x
+                + c.theme().layout.navigation_sidebar_width * count as f32
+                + c.theme().controls.small_height)
+                .min(
+                    frames.tabs.origin.x + frames.tabs.size.width - c.theme().controls.small_height,
+                );
+            self.core.show_dropdown(
+                Point::new(
+                    x.max(frames.tabs.origin.x),
+                    frames.tabs.origin.y + frames.tabs.size.height,
+                ),
+                c,
+            );
+        }
         c.request_redraw_in(b);
         result
     }
@@ -1687,6 +1770,105 @@ mod tests {
             &mut cx,
         );
         assert_eq!(v.core.workspace.borrow().all().len(), 2);
+    }
+    #[test]
+    fn compact_bar_adds_tabs_and_opens_the_actual_action_menu() {
+        let v = fixture();
+        let b = Rect::new(0., 0., 1040., 700.);
+        let t = Theme::LIGHT;
+        let mut list = DisplayList::new();
+        let mut text = TextMeasurer::new();
+        let mut nodes = vec![];
+        v.paint(
+            b,
+            &mut PaintContext::new(&mut list, &t, &t.typography, &mut text)
+                .with_accessibility_nodes(&mut nodes),
+        );
+        assert!(
+            !nodes
+                .iter()
+                .any(|n| n.label.as_deref() == Some("Split Right"))
+        );
+        let plus = nodes
+            .iter()
+            .find(|n| n.label.as_deref() == Some("New tab (Ctrl+Shift+T)"))
+            .unwrap()
+            .bounds;
+        let mut event_text = TextMeasurer::new();
+        let mut cx = EventContext::new(&t, &t.typography, &mut event_text);
+        let click = |v: &TerminalUi, bounds: Rect, cx: &mut EventContext<'_>| {
+            let p = Point::new(
+                bounds.origin.x + bounds.size.width / 2.,
+                bounds.origin.y + bounds.size.height / 2.,
+            );
+            for e in [
+                ViewEvent::PointerPressed {
+                    position: p,
+                    button: PointerButton::Primary,
+                },
+                ViewEvent::PointerReleased {
+                    position: p,
+                    button: PointerButton::Primary,
+                },
+            ] {
+                v.handle_event(b, &e, cx);
+            }
+        };
+        click(&v, plus, &mut cx);
+        assert_eq!(v.core.workspace.borrow().tabs.len(), 2);
+        for p in v.core.workspace.borrow().all() {
+            p.session.borrow_mut().suppress_launch();
+        }
+        nodes.clear();
+        v.paint(
+            b,
+            &mut PaintContext::new(&mut list, &t, &t.typography, &mut text)
+                .with_accessibility_nodes(&mut nodes),
+        );
+        let menu = nodes
+            .iter()
+            .find(|n| n.label.as_deref() == Some("Profiles and terminal actions"))
+            .unwrap()
+            .bounds;
+        click(&v, menu, &mut cx);
+        let request = cx
+            .take_context_menu_request()
+            .expect("chevron must open a real menu");
+        let settings = request
+            .items
+            .iter()
+            .find(|item| item.label == "Settings…")
+            .unwrap()
+            .command_id;
+        v.handle_event(
+            b,
+            &ViewEvent::ContextMenuResult {
+                request_id: request.request_id,
+                command_id: Some(settings),
+            },
+            &mut cx,
+        );
+        assert!(v.core.panel.get() == Panel::Settings);
+    }
+    #[test]
+    fn closing_an_inactive_tab_does_not_switch_the_active_session() {
+        let v = fixture();
+        let first = v.core.selected().unwrap().id;
+        v.core.queue(Action::New(0));
+        v.core.apply();
+        let second = v.core.selected().unwrap().id;
+        v.core.queue(Action::NextTab(-1));
+        v.core.apply();
+        v.core
+            .workspace
+            .borrow()
+            .settings
+            .borrow_mut()
+            .confirm_close = false;
+        v.core.queue(Action::CloseTabId(second));
+        v.core.apply();
+        assert_eq!(v.core.selected().unwrap().id, first);
+        assert_eq!(v.core.workspace.borrow().tabs.len(), 1);
     }
     #[test]
     fn native_views_paint_small_large_split_and_modal_without_borrow_panics() {
