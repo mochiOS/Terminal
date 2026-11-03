@@ -370,13 +370,12 @@ impl View for TerminalView {
                         .paint(rect, c);
                 }
                 if !text.trim().is_empty() {
-                    Text::styled(text, TextRole::Code)
+                    Text::styled(text.trim_end_matches(' '), TextRole::Code)
                         .monospaced()
                         .font_size(font_size)
                         .line_height(line)
                         .color(style.fg)
                         .weight(if style.bold { 700 } else { 400 })
-                        .cache_layout(false)
                         .paint(rect, c);
                 }
                 if style.underline {
