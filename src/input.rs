@@ -59,6 +59,12 @@ pub(crate) fn special(key: Special, shift: bool, alt: bool, control: bool) -> Ve
 }
 
 pub(crate) fn text(text: &str) -> Vec<u8> {
+    // Physical Enter/Tab already emit their bytes through send_key. ViewKit
+    // also reports their text representation; do not send that a second time.
+    // Multi-line commits and paste retain their own text/paste paths.
+    if matches!(text, "\r" | "\n" | "\r\n" | "\t") {
+        return Vec::new();
+    }
     text.replace("\r\n", "\n").replace('\r', "\n").into_bytes()
 }
 
