@@ -110,7 +110,9 @@ impl Transport {
                 "terminal input closed",
             ));
         }
-        self.pending.enqueue(bytes)
+        // Input and VT query replies must not wait for another rendered frame.
+        // The nonblocking queue retains any bytes the PTY cannot accept yet.
+        self.pending.send(bytes, self.master.as_mut().unwrap())
     }
     pub(crate) fn poll(&mut self, buffer: &mut TerminalBuffer) -> bool {
         let mut changed = false;
