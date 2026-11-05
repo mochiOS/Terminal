@@ -1,4 +1,6 @@
 mod input;
+#[cfg(target_os = "mochios")]
+mod consent;
 #[cfg(target_os = "linux")]
 mod linux_launch;
 mod model;
@@ -38,6 +40,20 @@ impl App for TerminalApp {
         ui::TerminalUi {
             core: self.core.clone(),
         }
+    }
+    #[cfg(target_os = "mochios")]
+    fn protected_presentation_for_window(
+        &self,
+        window: WindowId,
+    ) -> Option<viewkit::platform::ProtectedPresentation> {
+        if window != WindowId::PRIMARY {
+            return None;
+        }
+        self.core.consent.borrow().binding()
+    }
+    #[cfg(target_os = "mochios")]
+    fn protected_presentation_failed(&mut self, _: WindowId) {
+        self.core.consent.borrow_mut().withdraw();
     }
     fn close_requested(&mut self) -> bool {
         self.core.request_close()

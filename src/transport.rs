@@ -13,6 +13,7 @@ pub(crate) struct Transport {
     pub(crate) exited: bool,
     pub(crate) exit_reported: bool,
     input_failed: bool,
+    protected_input: bool,
     pub(crate) output_closed: bool,
     pub(crate) exit_status: Option<i32>,
 }
@@ -77,6 +78,7 @@ impl Transport {
             exited: false,
             exit_reported: false,
             input_failed: false,
+            protected_input: false,
             output_closed: false,
             exit_status: None,
         })
@@ -103,7 +105,26 @@ impl Transport {
             Ok(())
         }
     }
+    #[cfg(target_os = "mochios")]
+    pub(crate) fn consent_master(&self) -> io::Result<Option<u32>> {
+        if self.exited {
+            return Ok(None);
+        }
+        self.master
+            .as_ref()
+            .map(|file| crate::native_launch::master_reference(file.as_raw_fd()))
+            .transpose()
+    }
+    pub(crate) fn protect_input(&mut self, active: bool) {
+        if active {
+            self.pending.clear();
+        }
+        self.protected_input = active;
+    }
     pub(crate) fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.protected_input {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
         if self.exited || self.input_failed {
             return Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -134,6 +155,7 @@ impl Transport {
         let master = self.master.as_mut().unwrap();
         if !self.exited
             && !self.input_failed
+            && !self.protected_input
             && let Err(error) = self.pending.flush(master)
         {
             self.input_failed = true;

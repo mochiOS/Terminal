@@ -12,6 +12,7 @@ pub(crate) struct TerminalSession {
     attempted: bool,
     pub profile: Profile,
     pub failed: bool,
+    protected_input: bool,
 }
 impl TerminalSession {
     #[cfg(mochios_pty_launch_probe_310)]
@@ -27,6 +28,7 @@ impl TerminalSession {
             attempted: false,
             profile,
             failed: false,
+            protected_input: false,
         }
     }
     pub fn running(&self) -> bool {
@@ -42,6 +44,19 @@ impl TerminalSession {
                 .transport
                 .as_ref()
                 .is_none_or(|t| !t.exited || !t.output_closed)
+    }
+    #[cfg(target_os = "mochios")]
+    pub fn consent_master(&self) -> std::io::Result<Option<u32>> {
+        self.transport
+            .as_ref()
+            .map_or(Ok(None), |transport| transport.consent_master())
+    }
+    #[cfg(target_os = "mochios")]
+    pub fn protect_input(&mut self, active: bool) {
+        self.protected_input = active;
+        if let Some(transport) = &mut self.transport {
+            transport.protect_input(active);
+        }
     }
     #[cfg(test)]
     pub fn suppress_launch(&mut self) {
@@ -202,6 +217,9 @@ impl TerminalSession {
         ))
     }
     pub fn send(&mut self, bytes: &[u8]) -> bool {
+        if self.protected_input {
+            return false;
+        }
         self.buffer.live();
         self.dirty = true;
         if let Some(transport) = self.transport.as_mut() {

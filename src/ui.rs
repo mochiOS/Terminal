@@ -197,6 +197,8 @@ impl Editor {
     }
 }
 pub(crate) struct Core {
+    #[cfg(target_os = "mochios")]
+    pub consent: RefCell<crate::consent::Presenter>,
     pub workspace: RefCell<Workspace>,
     pending: Rc<Cell<Option<Action>>>,
     buttons: RefCell<BTreeMap<(Action, u8), ButtonInteractionState>>,
@@ -229,6 +231,8 @@ impl Core {
     pub fn new() -> Rc<Self> {
         let (settings, warning) = Settings::load();
         Rc::new(Self {
+            #[cfg(target_os = "mochios")]
+            consent: RefCell::new(crate::consent::Presenter::new()),
             workspace: RefCell::new(Workspace::new(settings)),
             pending: Rc::new(Cell::new(None)),
             buttons: RefCell::new(BTreeMap::new()),
@@ -286,6 +290,8 @@ impl Core {
         self.pending.set(Some(a));
     }
     pub fn request_close(&self) -> bool {
+        #[cfg(target_os = "mochios")]
+        self.consent.borrow_mut().withdraw();
         if self.exit_confirmed.get()
             || !self.workspace.borrow().settings.borrow().confirm_close
             || !self
@@ -1124,6 +1130,17 @@ impl View for TerminalUi {
                     ),
             );
         }
+        #[cfg(target_os = "mochios")]
+        self.core.consent.borrow_mut().poll(
+            self.core.selected(),
+            self.core.focused.get()
+                && self.core.panel.get() == Panel::None
+                && !self.core.find.state.is_focused(),
+        );
+        #[cfg(target_os = "mochios")]
+        if let Some(message) = self.core.consent.borrow_mut().take_notice() {
+            *self.core.notice.borrow_mut() = message;
+        }
         if self.core.panel.get() == Panel::Settings {
             Surface::app()
                 .content(self.core.settings_page())
@@ -1144,6 +1161,10 @@ impl View for TerminalUi {
             .paint(frames.tabs, c);
         if let Some(find) = frames.find {
             Toolbar::new(self.core.finder()).paint(find, c);
+        }
+        #[cfg(target_os = "mochios")]
+        if self.core.consent.borrow().paint(frames.body, c) {
+            return;
         }
         let w = self.core.workspace.borrow();
         let active = w.tabs.get(w.active).map(|tab| tab.active);
@@ -1241,6 +1262,11 @@ impl View for TerminalUi {
             if !focused {
                 self.core.drag.borrow_mut().take();
             }
+        }
+        #[cfg(target_os = "mochios")]
+        if self.core.consent.borrow_mut().event(e) {
+            c.request_redraw_in(b);
+            return EventResult::Consumed;
         }
         if self.core.panel.get() != Panel::None {
             if matches!(

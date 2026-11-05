@@ -9,6 +9,28 @@ unsafe extern "C" {
 }
 
 struct Reference(u32);
+pub(crate) fn master_reference(fd: libc::c_int) -> io::Result<u32> {
+    let rights = p::handle::HANDLE_RIGHT_CONTROL
+        | p::handle::HANDLE_RIGHT_TRANSFER
+        | p::handle::HANDLE_RIGHT_DUPLICATE;
+    let mut output = ExportedFdHandle::default();
+    // This FD API also encodes inherited data-access metadata. Capture through
+    // its readable descriptor contract, then discard data authority locally;
+    // neither the broker nor POSIX observations receive READ/WRITE rights.
+    if unsafe { mochi_fd_export(fd, rights | p::handle::HANDLE_RIGHT_READ, &mut output) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let narrowed = p::handle::duplicate(output.handle, rights).map_err(native);
+    let closed = p::handle::close(output.handle).map_err(native);
+    match (narrowed, closed) {
+        (Ok(handle), Ok(())) => Ok(handle),
+        (Ok(handle), Err(error)) => {
+            let _ = p::handle::close(handle);
+            Err(error)
+        }
+        (Err(error), _) => Err(error),
+    }
+}
 impl Drop for Reference {
     fn drop(&mut self) {
         let _ = p::handle::close(self.0);

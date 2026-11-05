@@ -7,6 +7,9 @@ const CAPACITY: usize = 64 * 1024;
 #[derive(Default)]
 pub(crate) struct PendingInput(VecDeque<u8>);
 impl PendingInput {
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
     pub(crate) fn send(&mut self, bytes: &[u8], writer: &mut impl Write) -> io::Result<()> {
         self.enqueue(bytes)?;
         self.flush(writer)
