@@ -6,7 +6,10 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
-use viewkit::{event::ViewEvent, prelude::*};
+use viewkit::{
+    event::{EventContext, ViewEvent},
+    prelude::*,
+};
 
 struct Reference(u32);
 impl Drop for Reference {
@@ -23,6 +26,7 @@ struct Question {
     correlation: Correlation,
     armed: bool,
     selected: Option<Choice>,
+    scroll: ScrollState,
 }
 pub(crate) struct Presenter {
     endpoint: Option<u32>,
@@ -229,6 +233,7 @@ impl Presenter {
                         correlation,
                         armed: false,
                         selected: None,
+                        scroll: ScrollState::new(),
                     });
                     self.owner
                         .as_ref()
@@ -256,10 +261,8 @@ impl Presenter {
             .as_ref()
             .map(|q| presentation::binding(q.correlation))
     }
-    pub fn paint(&self, bounds: Rect, context: &mut viewkit::view::PaintContext<'_>) -> bool {
-        let Some(question) = &self.question else {
-            return false;
-        };
+    fn content(&self) -> Option<ContentArea<VStack>> {
+        let question = self.question.as_ref()?;
         let offer = prompt::decode(&question.bytes).unwrap();
         let mut text = String::new();
         offer.write_text(&mut text).unwrap();
@@ -274,23 +277,39 @@ impl Presenter {
                 _ => "Choose y or a, then press Enter. n / Escape cancels.",
             }
         };
-        ContentArea::pane(
+        Some(ContentArea::pane(
             VStack::new()
                 .gap(StackGap::Large)
                 .child(Text::styled(
                     "Application Permissions",
                     TextRole::TitleMedium,
                 ))
-                .child(Text::styled(text, TextRole::Code).monospaced())
+                .child(
+                    Scroll::new(question.scroll.clone())
+                        .content(Text::styled(text, TextRole::Code).monospaced())
+                        .layout()
+                        .flex_grow(1.0)
+                        .flex_shrink(1.0),
+                )
                 .child(Text::body(status)),
-        )
-        .paint(bounds, context);
+        ))
+    }
+    pub fn paint(&self, bounds: Rect, context: &mut viewkit::view::PaintContext<'_>) -> bool {
+        let Some(content) = self.content() else {
+            return false;
+        };
+        content.paint(bounds, context);
         true
     }
-    pub fn event(&mut self, event: &ViewEvent) -> bool {
+    pub fn event(
+        &mut self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> bool {
         if matches!(event, ViewEvent::FocusChanged { focused: false })
             || ((self.question.is_some() || self.release_after_decision.is_some())
-                && matches!(event, ViewEvent::PointerPressed { .. }))
+                && matches!(event, ViewEvent::PointerPressed { position, .. } if !bounds.contains(*position)))
         {
             self.withdraw();
             return false;
@@ -317,6 +336,9 @@ impl Presenter {
         }
         if self.question.is_none() {
             return false;
+        }
+        if let Some(content) = self.content() {
+            content.handle_event(bounds, event, context);
         }
         if let ViewEvent::KeyPressed { key, modifiers } = event {
             if *key == Key::Tab && modifiers.shortcut() {

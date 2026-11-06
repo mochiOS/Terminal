@@ -1264,7 +1264,12 @@ impl View for TerminalUi {
             }
         }
         #[cfg(target_os = "mochios")]
-        if self.core.consent.borrow_mut().event(e) {
+        if self
+            .core
+            .consent
+            .borrow_mut()
+            .event(self.frames(b, &mut c.measure_context()).body, e, c)
+        {
             c.request_redraw_in(b);
             return EventResult::Consumed;
         }
