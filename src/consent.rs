@@ -31,6 +31,7 @@ pub(crate) struct Presenter {
     next: Instant,
     last_error: Option<i64>,
     notice: Option<String>,
+    release_after_decision: Option<Key>,
 }
 fn invalid() -> p::syscall::SysError {
     p::syscall::SysError::from(p::syscall::NativeError::AccessDenied.into_raw())
@@ -47,6 +48,7 @@ impl Presenter {
             next: Instant::now(),
             last_error: None,
             notice: None,
+            release_after_decision: None,
         }
     }
     fn call(
@@ -133,7 +135,11 @@ impl Presenter {
     fn clear_question(&mut self) {
         self.question = None;
         if let Some(owner) = &self.owner {
-            owner.pane.session.borrow_mut().protect_input(false);
+            owner
+                .pane
+                .session
+                .borrow_mut()
+                .protect_input(self.release_after_decision.is_some());
         }
     }
     fn failure(&mut self, stage: &str, reason: i64) {
@@ -150,6 +156,7 @@ impl Presenter {
         self.notice.take()
     }
     pub fn withdraw(&mut self) {
+        self.release_after_decision = None;
         if let Some(question) = self.question.take() {
             let _ = self.command(question.correlation, wire::Action::Dismissed);
         }
@@ -198,7 +205,9 @@ impl Presenter {
         let mut bytes = [0; prompt::MAX_MESSAGE_BYTES];
         match self.call(&wire::encode_text_poll(false), &mut bytes, Some(master)) {
             Ok(8) => {
-                self.last_error = None;
+                if self.last_error.take().is_some() {
+                    self.notice = Some(String::new());
+                }
                 self.clear_question();
             }
             Ok(length) => {
@@ -279,14 +288,34 @@ impl Presenter {
         true
     }
     pub fn event(&mut self, event: &ViewEvent) -> bool {
-        if self.question.is_none() {
+        if matches!(event, ViewEvent::FocusChanged { focused: false })
+            || ((self.question.is_some() || self.release_after_decision.is_some())
+                && matches!(event, ViewEvent::PointerPressed { .. }))
+        {
+            self.withdraw();
             return false;
         }
-        if matches!(
-            event,
-            ViewEvent::FocusChanged { focused: false } | ViewEvent::PointerPressed { .. }
-        ) {
-            self.withdraw();
+        if let Some(decision_key) = self.release_after_decision {
+            if matches!(event, ViewEvent::KeyReleased { key, .. } if *key == decision_key) {
+                self.release_after_decision = None;
+                if let Some(owner) = &self.owner {
+                    owner
+                        .pane
+                        .session
+                        .borrow_mut()
+                        .protect_input(self.question.is_some());
+                }
+            }
+            if matches!(
+                event,
+                ViewEvent::KeyPressed { .. }
+                    | ViewEvent::KeyReleased { .. }
+                    | ViewEvent::TextInput { .. }
+            ) {
+                return true;
+            }
+        }
+        if self.question.is_none() {
             return false;
         }
         if let ViewEvent::KeyPressed { key, modifiers } = event {
@@ -295,7 +324,10 @@ impl Presenter {
                 return false;
             }
             let correlation = self.question.as_ref().unwrap().correlation;
-            let plain = !modifiers.control() && !modifiers.alt() && !modifiers.super_key();
+            let plain = !modifiers.shift()
+                && !modifiers.control()
+                && !modifiers.alt()
+                && !modifiers.super_key();
             let proposed = if plain {
                 match key {
                     Key::Escape => Some(Choice::Deny),
@@ -310,7 +342,10 @@ impl Presenter {
             };
             if let Some(choice) = proposed {
                 match self.command(correlation, wire::Action::Decide(choice)) {
-                    Ok(()) => self.clear_question(),
+                    Ok(()) => {
+                        self.release_after_decision = Some(*key);
+                        self.clear_question();
+                    }
                     Err(reason) if retryable(reason) => {
                         self.question.as_mut().unwrap().selected = None
                     }
