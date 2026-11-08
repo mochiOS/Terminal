@@ -1,7 +1,10 @@
 //! Protected text questions live outside the untrusted VT/PTY stream.
 use crate::workspace::Pane;
 use mochi_user_platform as p;
-use p::capability::consent::{Choice, Correlation, frontend as wire, prompt};
+use p::capability::{
+    administrator,
+    consent::{Choice, Correlation, frontend as wire, prompt, question},
+};
 use std::{
     rc::Rc,
     time::{Duration, Instant},
@@ -10,6 +13,7 @@ use viewkit::{
     event::{EventContext, ViewEvent},
     prelude::*,
 };
+use zeroize::Zeroizing;
 
 struct Reference(u32);
 impl Drop for Reference {
@@ -27,6 +31,13 @@ struct Question {
     armed: bool,
     selected: Option<Choice>,
     scroll: ScrollState,
+    username: TextFieldInteractionState,
+    password: TextFieldInteractionState,
+}
+impl Drop for Question {
+    fn drop(&mut self) {
+        self.password.clear();
+    }
 }
 pub(crate) struct Presenter {
     endpoint: Option<u32>,
@@ -206,7 +217,7 @@ impl Presenter {
             self.owner = Some(Owner { pane, master });
         }
         let master = self.owner.as_ref().unwrap().master.0;
-        let mut bytes = [0; prompt::MAX_MESSAGE_BYTES];
+        let mut bytes = [0; question::MAX_BYTES];
         match self.call(&wire::encode_text_poll(false), &mut bytes, Some(master)) {
             Ok(8) => {
                 if self.last_error.take().is_some() {
@@ -215,25 +226,34 @@ impl Presenter {
                 self.clear_question();
             }
             Ok(length) => {
-                let offer = match prompt::decode(&bytes[..length]) {
+                let offer = match question::decode(&bytes[..length]) {
                     Ok(offer) => offer,
                     Err(_) => {
                         self.withdraw();
                         return;
                     }
                 };
-                let correlation = offer.correlation;
+                let correlation = offer.offer.correlation;
                 if self
                     .question
                     .as_ref()
                     .is_none_or(|question| question.correlation != correlation)
                 {
+                    let username = TextFieldInteractionState::new();
+                    let password = TextFieldInteractionState::new();
+                    if let Some(admin) = offer.administrator {
+                        username.set_value(admin.username);
+                        username.set_focused(admin.username.is_empty());
+                        password.set_focused(!admin.username.is_empty());
+                    }
                     self.question = Some(Question {
                         bytes: bytes[..length].to_vec(),
                         correlation,
                         armed: false,
                         selected: None,
                         scroll: ScrollState::new(),
+                        username,
+                        password,
                     });
                     self.owner
                         .as_ref()
@@ -263,7 +283,36 @@ impl Presenter {
     }
     fn content(&self) -> Option<ContentArea<VStack>> {
         let question = self.question.as_ref()?;
-        let offer = prompt::decode(&question.bytes).unwrap();
+        let offer = question::decode(&question.bytes).unwrap();
+        if let Some(admin) = offer.administrator {
+            return Some(ContentArea::pane(
+                VStack::new()
+                    .gap(StackGap::Large)
+                    .child(Text::styled(
+                        "Administrator authentication",
+                        TextRole::TitleMedium,
+                    ))
+                    .child(Text::body(admin.description.to_owned()))
+                    .child(
+                        Text::body(format!("Application: {}", offer.offer.package))
+                            .tone(TextTone::Secondary),
+                    )
+                    .child(
+                        TextField::with_interaction(question.username.clone())
+                            .placeholder("Administrator account"),
+                    )
+                    .child(
+                        TextField::with_interaction(question.password.clone())
+                            .placeholder("Password")
+                            .secure(true),
+                    )
+                    .child(Text::body(if question.armed {
+                        "Enter authenticates. Escape cancels."
+                    } else {
+                        "Waiting for protected display and released keys…"
+                    })),
+            ));
+        }
         let mut text = String::new();
         offer.write_text(&mut text).unwrap();
         let status = if !question.armed {
@@ -339,6 +388,55 @@ impl Presenter {
         }
         if let Some(content) = self.content() {
             content.handle_event(bounds, event, context);
+        }
+        if question::decode(&self.question.as_ref().unwrap().bytes)
+            .unwrap()
+            .administrator
+            .is_some()
+        {
+            if let ViewEvent::KeyPressed { key, modifiers } = event {
+                if *key == Key::Escape || (*key == Key::Tab && modifiers.shortcut()) {
+                    self.withdraw();
+                    return true;
+                }
+                if *key == Key::Enter
+                    && !modifiers.shift()
+                    && !modifiers.control()
+                    && !modifiers.alt()
+                    && !modifiers.super_key()
+                    && self.question.as_ref().unwrap().armed
+                {
+                    let question = self.question.as_ref().unwrap();
+                    let name = question.username.value();
+                    let password = Zeroizing::new(question.password.value());
+                    let mut bytes = Zeroizing::new([0; administrator::MAX_CREDENTIAL_BYTES]);
+                    if let Ok(length) = administrator::encode_credentials(
+                        administrator::Credentials {
+                            correlation: question.correlation,
+                            name: &name,
+                            password: password.as_bytes(),
+                        },
+                        &mut bytes[..],
+                    ) {
+                        match self.call(&bytes[..length], &mut [0; 8], None) {
+                            Ok(8) => {
+                                self.release_after_decision = Some(*key);
+                                self.clear_question();
+                            }
+                            Err(reason) if retryable(reason) => {}
+                            _ => {
+                                let correlation = self.question.as_ref().unwrap().correlation;
+                                let _ = self.command(correlation, wire::Action::Dismissed);
+                                // Swallow this submit's queued text/release
+                                // even when authentication was rejected.
+                                self.release_after_decision = Some(*key);
+                                self.clear_question();
+                            }
+                        }
+                    }
+                }
+            }
+            return true;
         }
         if let ViewEvent::KeyPressed { key, modifiers } = event {
             if *key == Key::Tab && modifiers.shortcut() {

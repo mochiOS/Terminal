@@ -1036,6 +1036,7 @@ dependencies = [
  "mochios-capability-protocol",
  "mochios-package-manifest",
  "mochios-workspace-protocol",
+ "zeroize",
 ]
 
 [[package]]
@@ -2260,6 +2261,7 @@ dependencies = [
  "toml",
  "viewkit",
  "vt100",
+ "zeroize",
 ]
 
 [[package]]
@@ -3314,10 +3316,6 @@ version = "0.1.0"
 
 [[patch.unused]]
 name = "mnu"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "mochios-mdriver-protocol"
 version = "0.1.0"
 
 [[patch.unused]]
