@@ -35,6 +35,7 @@ impl App for TerminalApp {
         WindowOptions::new("Terminal")
             .size(1040.0, 700.0)
             .resizable(true)
+            .titlebar(self.core.titlebar())
     }
     fn body(&self, _: &ViewContext) -> Self::Body {
         ui::TerminalUi {

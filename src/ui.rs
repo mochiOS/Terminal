@@ -4,6 +4,7 @@ use crate::{
     workspace::Workspace,
 };
 use appcore::prelude::*;
+use appcore::window::{TitleBar, drag_region};
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -209,6 +210,9 @@ pub(crate) struct Core {
     tabs: TabsInteractionState,
     tab_selected: State<usize>,
     tab_scroll: ScrollState,
+    tab_reveal: Rc<Cell<Option<(usize, usize, u32)>>>,
+    caption_bounds: Cell<Option<Rect>>,
+    content_bounds: Cell<Option<Rect>>,
     panel: Cell<Panel>,
     find_visible: Cell<bool>,
     find: Field,
@@ -243,6 +247,9 @@ impl Core {
             tabs: TabsInteractionState::new(),
             tab_selected: State::new(1),
             tab_scroll: ScrollState::new(),
+            tab_reveal: Rc::new(Cell::new(None)),
+            caption_bounds: Cell::new(None),
+            content_bounds: Cell::new(None),
             panel: Cell::new(Panel::None),
             find_visible: Cell::new(false),
             find: Field::new("Find in scrollback"),
@@ -670,12 +677,54 @@ impl Core {
         }
         commands
     }
+    /// Uses standard ViewKit tabs and actions beside protected system controls.
+    pub(crate) fn titlebar(self: &Rc<Self>) -> TitleBar {
+        TitleBar::new()
+            .height(Theme::current().layout.top_bar_height)
+            .background(RectangleColor::SubtleSurface)
+            .separator(true)
+            .center(drag_region(TerminalTitleBar { core: self.clone() }).including_controls())
+    }
+    fn select_caption_tab(&self) {
+        let selected = self.tab_selected.get();
+        let mut workspace = self.workspace.borrow_mut();
+        if let Some(index) = workspace
+            .tabs
+            .iter()
+            .position(|tab| tab.id as usize == selected)
+        {
+            if workspace.active != index {
+                workspace.active = index;
+                workspace.zoomed = false;
+            }
+        }
+    }
+    fn present_dropdown(&self, event: &ViewEvent, c: &mut EventContext<'_>) {
+        if self.open_menu.replace(false) {
+            if let Some(bounds) = self.caption_bounds.get() {
+                let position = event.position().unwrap_or(Point::new(
+                    bounds.origin.x + bounds.size.width,
+                    bounds.origin.y,
+                ));
+                self.show_dropdown(
+                    Point::new(
+                        position
+                            .x
+                            .clamp(bounds.origin.x, bounds.origin.x + bounds.size.width),
+                        bounds.origin.y + bounds.size.height,
+                    ),
+                    c,
+                );
+            }
+        }
+    }
     fn tabstrip(&self) -> HStack {
         let w = self.workspace.borrow();
         let width = Theme::current().layout.navigation_sidebar_width;
         let mut tabs = Tabs::with_interaction(self.tab_selected.binding(), self.tabs.clone())
             .item_width(width)
             .document_style()
+            .enabled(self.panel.get() == Panel::None)
             .accessibility_label("Terminal tabs");
         for tab in &w.tabs {
             let title = tab.name.clone().unwrap_or_else(|| {
@@ -700,12 +749,19 @@ impl Core {
             .alignment(StackAlignment::Center)
             .gap(StackGap::ExtraSmall)
             .child(
-                Scroll::new(self.tab_scroll.clone())
-                    .axis(ScrollAxis::Horizontal)
-                    .content(tabs)
-                    .layout()
-                    .width(width * w.tabs.len() as f32)
-                    .flex_shrink(1.0),
+                CaptionTabs {
+                    scroll: Scroll::new(self.tab_scroll.clone())
+                        .axis(ScrollAxis::Horizontal)
+                        .content(tabs),
+                    state: self.tab_scroll.clone(),
+                    reveal: self.tab_reveal.clone(),
+                    selected: w.active,
+                    count: w.tabs.len(),
+                    item_width: width,
+                }
+                .layout()
+                .width(width * w.tabs.len() as f32)
+                .flex_shrink(1.0),
             )
             .child(
                 self.icon(
@@ -713,6 +769,7 @@ impl Core {
                     "New tab (Ctrl+Shift+T)",
                     Action::New(default),
                 )
+                .enabled(self.panel.get() == Panel::None)
                 .layout()
                 .flex_shrink(0.0),
             )
@@ -722,6 +779,7 @@ impl Core {
                     "Profiles and terminal actions",
                     Action::Dropdown,
                 )
+                .enabled(self.panel.get() == Panel::None)
                 .layout()
                 .flex_shrink(0.0),
             )
@@ -976,26 +1034,116 @@ impl Core {
             .content(content)
     }
 }
+struct CaptionTabs {
+    scroll: Scroll,
+    state: ScrollState,
+    reveal: Rc<Cell<Option<(usize, usize, u32)>>>,
+    selected: usize,
+    count: usize,
+    item_width: f32,
+}
+impl View for CaptionTabs {
+    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
+        self.scroll.measure(constraints, context)
+    }
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        let key = (self.selected, self.count, bounds.size.width.to_bits());
+        if self.reveal.get() != Some(key) {
+            let left = self.selected as f32 * self.item_width;
+            let right = left + self.item_width;
+            let offset = self.state.offset_x();
+            if left < offset {
+                self.state.set_offset(left, 0.0);
+            } else if right > offset + bounds.size.width {
+                self.state
+                    .set_offset((right - bounds.size.width).max(0.0), 0.0);
+            }
+            self.reveal.set(Some(key));
+        }
+        self.scroll.paint(bounds, context);
+    }
+    fn handle_event(
+        &self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
+        self.scroll.handle_event(bounds, event, context)
+    }
+}
+
+/// Caption input stays separate from terminal input: Enter and typed text are
+/// routed only by TerminalUi, never to the tab labels or profile button.
+struct TerminalTitleBar {
+    core: Rc<Core>,
+}
+impl View for TerminalTitleBar {
+    fn measure(&self, constraints: Constraints, context: &mut MeasureContext<'_>) -> Size {
+        constraints.constrain(Size::new(
+            constraints.maximum.width,
+            context.theme.layout.top_bar_height,
+        ))
+    }
+    fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+        self.core.caption_bounds.set(Some(bounds));
+        self.core.tabstrip().paint(bounds, context);
+    }
+    fn handle_event(
+        &self,
+        bounds: Rect,
+        event: &ViewEvent,
+        context: &mut EventContext<'_>,
+    ) -> EventResult {
+        #[cfg(target_os = "mochios")]
+        if self.core.consent.borrow_mut().event(
+            self.core.content_bounds.get().unwrap_or(bounds),
+            event,
+            context,
+        ) {
+            return EventResult::Consumed;
+        }
+        if matches!(
+            event,
+            ViewEvent::KeyPressed { .. }
+                | ViewEvent::TextInput { .. }
+                | ViewEvent::Backspace
+                | ViewEvent::KeyReleased { .. }
+        ) {
+            return EventResult::Ignored;
+        }
+        let result = if self.core.panel.get() == Panel::None {
+            self.core.tabstrip().handle_event(bounds, event, context)
+        } else if event.requires_broadcast() {
+            // Lifecycle cleanup must still reach controls hidden behind a dialog.
+            self.core.tabstrip().handle_event(bounds, event, context);
+            EventResult::Ignored
+        } else {
+            EventResult::Ignored
+        };
+        self.core.select_caption_tab();
+        self.core.apply();
+        self.core.present_dropdown(event, context);
+        if result.is_consumed() {
+            context.request_redraw();
+        }
+        result
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TerminalUi {
     pub core: Rc<Core>,
 }
 #[derive(Clone, Copy)]
 struct Frames {
-    tabs: Rect,
     find: Option<Rect>,
     body: Rect,
     status: Rect,
 }
 impl TerminalUi {
     fn frames(&self, b: Rect, c: &mut MeasureContext<'_>) -> Frames {
-        let top = 0.0;
-        let tab = c.theme.tabs.height.min((b.size.height - top).max(0.0));
         let status = if !self.core.notice.borrow().is_empty() || self.core.find_visible.get() {
-            c.theme
-                .layout
-                .status_bar_height
-                .min((b.size.height - top - tab).max(0.0))
+            c.theme.layout.status_bar_height.min(b.size.height.max(0.0))
         } else {
             0.0
         };
@@ -1006,25 +1154,21 @@ impl TerminalUi {
                     c,
                 )
                 .height
-                .min((b.size.height - top - tab - status).max(0.0))
+                .min((b.size.height - status).max(0.0))
         } else {
             0.0
         };
         Frames {
-            tabs: Rect::new(b.origin.x, b.origin.y + top, b.size.width, tab),
-            find: self.core.find_visible.get().then(|| {
-                Rect::new(
-                    b.origin.x,
-                    b.origin.y + top + tab,
-                    b.size.width,
-                    find_height,
-                )
-            }),
+            find: self
+                .core
+                .find_visible
+                .get()
+                .then(|| Rect::new(b.origin.x, b.origin.y, b.size.width, find_height)),
             body: Rect::new(
                 b.origin.x,
-                b.origin.y + top + tab + find_height,
+                b.origin.y + find_height,
                 b.size.width,
-                (b.size.height - top - tab - find_height - status).max(0.0),
+                (b.size.height - find_height - status).max(0.0),
             ),
             status: Rect::new(
                 b.origin.x,
@@ -1104,13 +1248,20 @@ impl View for TerminalUi {
         c.constrain(c.maximum)
     }
     fn paint(&self, b: Rect, c: &mut PaintContext<'_>) {
+        self.core.content_bounds.set(Some(b));
         self.core.apply();
         let panes = self.core.workspace.borrow().all();
         let mut running = false;
         for pane in &panes {
             let mut session = pane.session.borrow_mut();
+            let previous_title = session.buffer.title().to_owned();
             if session.poll() {
                 self.core.last_activity.set(Instant::now());
+            }
+            if previous_title != session.buffer.title() {
+                if let Some(caption) = self.core.caption_bounds.get() {
+                    c.request_redraw_in_at(caption, Instant::now());
+                }
             }
             running |= session.needs_poll();
             if session.buffer.take_bell() {
@@ -1156,9 +1307,6 @@ impl View for TerminalUi {
             },
         );
         Surface::app().paint(b, c);
-        Surface::sidebar()
-            .content(self.core.tabstrip())
-            .paint(frames.tabs, c);
         if let Some(find) = frames.find {
             Toolbar::new(self.core.finder()).paint(find, c);
         }
@@ -1499,20 +1647,6 @@ impl View for TerminalUi {
                 | ViewEvent::Backspace
         );
         let mut result = EventResult::Ignored;
-        if !matches!(
-            e,
-            ViewEvent::KeyPressed { .. } | ViewEvent::TextInput { .. } | ViewEvent::Backspace
-        ) {
-            result = result.merge(self.core.tabstrip().handle_event(frames.tabs, e, c));
-            let selected = self.core.tab_selected.get();
-            let mut w = self.core.workspace.borrow_mut();
-            if let Some(index) = w.tabs.iter().position(|t| t.id as usize == selected) {
-                if w.active != index {
-                    w.active = index;
-                    w.zoomed = false;
-                }
-            }
-        }
         if let Some(find) = frames
             .find
             .filter(|_| !keyboard || self.core.find.state.is_focused())
@@ -1547,22 +1681,7 @@ impl View for TerminalUi {
             self.core.last_activity.set(Instant::now());
         }
         self.core.apply();
-        if self.core.open_menu.replace(false) {
-            let count = self.core.workspace.borrow().tabs.len();
-            let x = (frames.tabs.origin.x
-                + c.theme().layout.navigation_sidebar_width * count as f32
-                + c.theme().controls.small_height)
-                .min(
-                    frames.tabs.origin.x + frames.tabs.size.width - c.theme().controls.small_height,
-                );
-            self.core.show_dropdown(
-                Point::new(
-                    x.max(frames.tabs.origin.x),
-                    frames.tabs.origin.y + frames.tabs.size.height,
-                ),
-                c,
-            );
-        }
+        self.core.present_dropdown(e, c);
         c.request_redraw_in(b);
         result
     }
@@ -1580,6 +1699,188 @@ mod tests {
         }
         TerminalUi { core }
     }
+    struct TerminalWindow<'a>(&'a TerminalUi);
+    fn window(ui: &TerminalUi) -> TerminalWindow<'_> {
+        TerminalWindow(ui)
+    }
+    impl TerminalWindow<'_> {
+        fn frames(&self, b: Rect, theme: &Theme) -> (Rect, Rect) {
+            let layout = appcore::window::DecorationLayout {
+                height: theme
+                    .layout
+                    .top_bar_height
+                    .max(viewkit::decoration::metrics::TITLE_BAR_HEIGHT as f32)
+                    .min(b.size.height),
+                controls_width: viewkit::decoration::metrics::CONTROLS_WIDTH as f32,
+                state: appcore::window::WindowState::Normal,
+            };
+            (
+                layout.custom_bounds(b),
+                Rect::new(
+                    b.origin.x,
+                    b.origin.y + layout.height,
+                    b.size.width,
+                    (b.size.height - layout.height).max(0.0),
+                ),
+            )
+        }
+    }
+    impl View for TerminalWindow<'_> {
+        fn paint(&self, bounds: Rect, context: &mut PaintContext<'_>) {
+            let (caption, body) = self.frames(bounds, context.theme);
+            self.0.paint(body, context);
+            drag_region(TerminalTitleBar {
+                core: self.0.core.clone(),
+            })
+            .including_controls()
+            .paint(caption, context);
+        }
+        fn handle_event(
+            &self,
+            bounds: Rect,
+            event: &ViewEvent,
+            context: &mut EventContext<'_>,
+        ) -> EventResult {
+            let (caption, body) = self.frames(bounds, context.theme());
+            let mut result = EventResult::Ignored;
+            if event.requires_broadcast() || event.position().is_none_or(|p| caption.contains(p)) {
+                result = drag_region(TerminalTitleBar {
+                    core: self.0.core.clone(),
+                })
+                .including_controls()
+                .handle_event(caption, event, context);
+            }
+            if result.is_consumed() && !event.requires_broadcast() {
+                return result;
+            }
+            if event.requires_broadcast() || event.position().is_none_or(|p| body.contains(p)) {
+                result = result.merge(self.0.handle_event(body, event, context));
+            }
+            result
+        }
+    }
+    #[test]
+    fn integrated_caption_reserves_system_controls_and_removes_body_tabstrip() {
+        let v = fixture();
+        let options = WindowOptions::new("Terminal").titlebar(v.core.titlebar());
+        assert_eq!(
+            options.decoration(),
+            appcore::window::DecorationMode::Integrated
+        );
+        assert!(options.validate().is_ok());
+        for theme in [Theme::LIGHT, Theme::DARK] {
+            for width in [360.0, 1040.0] {
+                let bounds = Rect::new(0.0, 0.0, width, 700.0);
+                let mut list = DisplayList::new();
+                let mut nodes = Vec::new();
+                let mut text = TextMeasurer::new();
+                window(&v).paint(
+                    bounds,
+                    &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text)
+                        .with_accessibility_nodes(&mut nodes),
+                );
+                let (caption, body) = window(&v).frames(bounds, &theme);
+                for node in nodes.iter().filter(|n| {
+                    n.role == AccessibilityRole::Tab
+                        || n.label.as_deref() == Some("New tab (Ctrl+Shift+T)")
+                        || n.label.as_deref() == Some("Profiles and terminal actions")
+                }) {
+                    assert!(node.bounds.origin.y >= caption.origin.y);
+                    assert!(node.bounds.origin.y + node.bounds.size.height <= body.origin.y + 0.1);
+                    assert!(
+                        node.bounds.origin.x + node.bounds.size.width
+                            <= caption.origin.x + caption.size.width + 0.1
+                    );
+                }
+                nodes.clear();
+                v.paint(
+                    body,
+                    &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text)
+                        .with_accessibility_nodes(&mut nodes),
+                );
+                assert!(!nodes.iter().any(|n| n.role == AccessibilityRole::TabList));
+                assert_eq!(
+                    v.frames(
+                        body,
+                        &mut MeasureContext {
+                            theme: &theme,
+                            typography: &theme.typography,
+                            text_measurer: &mut text
+                        }
+                    )
+                    .body
+                    .origin
+                    .y,
+                    body.origin.y
+                );
+            }
+        }
+    }
+    #[test]
+    fn new_tabs_remain_reachable_in_a_narrow_integrated_caption() {
+        let v = fixture();
+        for _ in 0..6 {
+            v.core.queue(Action::New(0));
+            v.core.apply();
+        }
+        for pane in v.core.workspace.borrow().all() {
+            pane.session.borrow_mut().suppress_launch();
+        }
+        let theme = Theme::LIGHT;
+        let mut list = DisplayList::new();
+        let mut nodes = Vec::new();
+        let mut text = TextMeasurer::new();
+        window(&v).paint(
+            Rect::new(0.0, 0.0, 360.0, 700.0),
+            &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text)
+                .with_accessibility_nodes(&mut nodes),
+        );
+        assert!(v.core.tab_scroll.offset_x() > 0.0);
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.role == AccessibilityRole::Tab && node.selected)
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.label.as_deref() == Some("New tab (Ctrl+Shift+T)"))
+        );
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.label.as_deref() == Some("Profiles and terminal actions"))
+        );
+    }
+
+    #[test]
+    fn caption_does_not_consume_terminal_keys_or_text_input() {
+        let v = fixture();
+        let theme = Theme::LIGHT;
+        let mut text = TextMeasurer::new();
+        let mut cx = EventContext::new(&theme, &theme.typography, &mut text);
+        let view = TerminalTitleBar {
+            core: v.core.clone(),
+        };
+        let bounds = Rect::new(0.0, 0.0, 900.0, theme.layout.top_bar_height);
+        for event in [
+            ViewEvent::KeyPressed {
+                key: Key::Enter,
+                modifiers: KeyModifiers::default(),
+            },
+            ViewEvent::KeyPressed {
+                key: Key::ArrowLeft,
+                modifiers: KeyModifiers::default(),
+            },
+            ViewEvent::TextInput { text: "ls".into() },
+            ViewEvent::Backspace,
+        ] {
+            assert!(!view.handle_event(bounds, &event, &mut cx).is_consumed());
+            assert!(cx.take_context_menu_request().is_none());
+        }
+        assert_eq!(v.core.workspace.borrow().tabs.len(), 1);
+    }
+
     #[test]
     fn workspace_commands_settings_cancel_and_close_confirmation_are_functional() {
         let v = fixture();
@@ -1637,7 +1938,7 @@ mod tests {
             )
             .is_none()
         );
-        v.handle_event(
+        window(&v).handle_event(
             b,
             &ViewEvent::KeyPressed {
                 key: Key::ArrowRight,
@@ -1646,7 +1947,7 @@ mod tests {
             &mut cx,
         );
         assert_eq!(v.core.workspace.borrow().tabs.len(), 1);
-        v.handle_event(
+        window(&v).handle_event(
             b,
             &ViewEvent::KeyPressed {
                 key: Key::Character('f'),
@@ -1655,7 +1956,7 @@ mod tests {
             &mut cx,
         );
         assert!(v.core.find_visible.get());
-        v.handle_event(
+        window(&v).handle_event(
             b,
             &ViewEvent::TextInput {
                 text: "search".into(),
@@ -1663,7 +1964,7 @@ mod tests {
             &mut cx,
         );
         assert_eq!(v.core.find.state.value(), "search");
-        v.handle_event(
+        window(&v).handle_event(
             b,
             &ViewEvent::KeyPressed {
                 key: Key::Escape,
@@ -1696,7 +1997,7 @@ mod tests {
         v.core.queue(Action::Commands);
         v.core.apply();
         v.core.palette_query.state.set_value("New tab");
-        v.handle_event(
+        window(&v).handle_event(
             b,
             &ViewEvent::KeyPressed {
                 key: Key::ArrowDown,
@@ -1705,7 +2006,7 @@ mod tests {
             &mut cx,
         );
         assert_eq!(v.core.palette_index.get(), 1);
-        v.handle_event(
+        window(&v).handle_event(
             b,
             &ViewEvent::KeyPressed {
                 key: Key::Enter,
@@ -1723,7 +2024,7 @@ mod tests {
         let mut list = DisplayList::new();
         let mut text = TextMeasurer::new();
         let mut nodes = vec![];
-        v.paint(
+        window(&v).paint(
             b,
             &mut PaintContext::new(&mut list, &t, &t.typography, &mut text)
                 .with_accessibility_nodes(&mut nodes),
@@ -1755,7 +2056,7 @@ mod tests {
                     button: PointerButton::Primary,
                 },
             ] {
-                v.handle_event(b, &e, cx);
+                window(&v).handle_event(b, &e, cx);
             }
         };
         click(&v, plus, &mut cx);
@@ -1764,7 +2065,7 @@ mod tests {
             p.session.borrow_mut().suppress_launch();
         }
         nodes.clear();
-        v.paint(
+        window(&v).paint(
             b,
             &mut PaintContext::new(&mut list, &t, &t.typography, &mut text)
                 .with_accessibility_nodes(&mut nodes),
@@ -1784,7 +2085,7 @@ mod tests {
             .find(|item| item.label == "Settings…")
             .unwrap()
             .command_id;
-        v.handle_event(
+        window(&v).handle_event(
             b,
             &ViewEvent::ContextMenuResult {
                 request_id: request.request_id,
@@ -1880,7 +2181,7 @@ mod tests {
                     }
                     let mut list = DisplayList::new();
                     let mut text = TextMeasurer::new();
-                    v.paint(
+                    window(&v).paint(
                         b,
                         &mut PaintContext::new(&mut list, &theme, &theme.typography, &mut text),
                     );
