@@ -8,7 +8,7 @@ publish = false
 
 [dependencies]
 viewkit = "2.0.0"
-appcore = { package = "mochios-appcore", path = "../../tools/devkit/crates/appcore" }
+appcore = { package = "mochios-appcore", git = "https://github.com/mochiOS/devkit" }
 vt100 = "=0.18.1"
 zeroize = { version = "1.8", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
