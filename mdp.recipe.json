@@ -1,0 +1,27 @@
+{
+  "format": 1,
+  "steps": [
+    "$(MOCHIOS_CARGO) --manifest-path $(PROJECT)/Cargo.toml --bin terminal",
+    "python3 $(ROOT)/tools/devkit/build-support/package-app.py --source $(PROJECT) --binary $(RUST_TARGET_DIR)/x86_64-unknown-mochios/release/terminal --mpack $(MPACK)"
+  ],
+  "package": {
+    "name": "app-terminal",
+    "version": "0.1.0",
+    "target": "x86_64-mochios",
+    "abi": "mochios-1"
+  },
+  "artifact": "out/mdp/app-terminal.tar.mdp",
+  "exports": [
+    {
+      "source": "out/mdp/application/application.mpkg",
+      "area": "applications",
+      "destination": "terminal.mpkg"
+    }
+  ],
+  "metadata": {
+    "application": {
+      "source": "terminal",
+      "mpkg": "terminal.mpkg"
+    }
+  }
+}
